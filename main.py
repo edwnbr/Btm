@@ -1,5 +1,8 @@
+# ===================== main.py =====================
 import logging
 import os
+import threading
+import time
 import requests
 from flask import Flask, request
 from telegram import Bot, Update, ReplyKeyboardMarkup
@@ -7,26 +10,28 @@ from telegram.ext import (
     Updater, CommandHandler, MessageHandler, Filters,
     CallbackContext, Dispatcher
 )
-from apscheduler.schedulers.background import BackgroundScheduler
 
-# ================ CONFIG ====================
+# ========== CONFIG ==========
 BOT_TOKEN = "7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE"
 RENDER_EXTERNAL_HOSTNAME = "btm-c4tt.onrender.com"
 WEBHOOK_HOST = f"https://{RENDER_EXTERNAL_HOSTNAME}"
 WEBHOOK_PATH = f"/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
-PORT = int(os.environ.get("PORT", 8443))
+PORT = int(os.environ.get('PORT', 8443))
+
+# ========== LOGGING ==========
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ========== APP ==========
 app = Flask(__name__)
 bot = Bot(token=BOT_TOKEN)
 dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
-logging.basicConfig(level=logging.INFO)
-scheduler = BackgroundScheduler()
-scheduler.start()
 
-# ================ USER DATA ====================
+# ========== USER DATA ==========
 user_data = {}
 
-# ================ TEXTS ====================
+# ========== TRANSLATIONS ==========
 texts = {
     "ru": {
         "start": "👋 Привет! Пройди капчу, чтобы продолжить.",
@@ -35,20 +40,18 @@ texts = {
         "menu": "👇 Выбери действие:",
         "settings": "⚙️ Ваши настройки:",
         "confirm": "✅ Вы выбрали: ",
-        "select_lang": "🌐 Выберите язык:",
-        "select_exchange": "📈 Выберите биржу:",
-        "select_market": "📊 Выберите рынок:",
-        "select_notify_type": "🔔 Тип уведомлений:",
-        "select_tf": "⏱ Интервал:",
-        "select_threshold": "📉 Порог (%):",
-        "main_menu": [["🌐 Язык", "⚙️ Настройки"], ["📈 Биржа", "📊 Рынок"], ["🔔 Уведомления"]],
-        "not_verified": "🚫 Сначала подтвердите CAPTCHA.",
-        "current_settings": "⚙️ Текущие настройки:
-Биржа: {exchange}
-Рынок: {market}
-%: {threshold}%
-Интервал: {interval} сек
-Тип: {notif}",
+        "select_exchange": "📊 Выберите биржу:",
+        "select_market": "📈 Выберите рынок:",
+        "select_threshold": "📉 Выберите порог (%):",
+        "select_timeframe": "⏱ Выберите таймфрейм:",
+        "current_settings": "⚙️ Текущие настройки:",
+        "spot": "Спот",
+        "futures": "Фьючерсы",
+        "dump": "Дамп",
+        "pump": "Памп",
+        "both": "Оба",
+        "main_menu": [["🌐 Язык", "⚙️ Настройки"], ["📊 Биржа", "📈 Рынок"], ["📉 Порог", "⏱ Таймфрейм"]],
+        "back": "⬅️ Назад в меню",
     },
     "en": {
         "start": "👋 Hello! Please verify CAPTCHA to continue.",
@@ -57,150 +60,174 @@ texts = {
         "menu": "👇 Choose an action:",
         "settings": "⚙️ Your Settings:",
         "confirm": "✅ You selected: ",
-        "select_lang": "🌐 Choose a language:",
-        "select_exchange": "📈 Choose an exchange:",
-        "select_market": "📊 Choose market type:",
-        "select_notify_type": "🔔 Notification type:",
-        "select_tf": "⏱ Timeframe:",
-        "select_threshold": "📉 Threshold (%):",
-        "main_menu": [["🌐 Language", "⚙️ Settings"], ["📈 Exchange", "📊 Market"], ["🔔 Notifications"]],
-        "not_verified": "🚫 Please complete CAPTCHA first.",
-        "current_settings": "⚙️ Current Settings:
-Exchange: {exchange}
-Market: {market}
-%: {threshold}%
-Interval: {interval} sec
-Type: {notif}",
-    },
+        "select_exchange": "📊 Choose exchange:",
+        "select_market": "📈 Choose market:",
+        "select_threshold": "📉 Choose threshold (%):",
+        "select_timeframe": "⏱ Choose timeframe:",
+        "current_settings": "⚙️ Current settings:",
+        "spot": "Spot",
+        "futures": "Futures",
+        "dump": "Dump",
+        "pump": "Pump",
+        "both": "Both",
+        "main_menu": [["🌐 Language", "⚙️ Settings"], ["📊 Exchange", "📈 Market"], ["📉 Threshold", "⏱ Timeframe"]],
+        "back": "⬅️ Back to menu",
+    }
 }
 
-exchanges = ["Binance", "Bybit", "MEXC", "BingX"]
-markets = {"ru": ["Спот", "Фьючерсы"], "en": ["Spot", "Futures"]}
-notify_types = {"ru": ["Памп", "Дамп", "Оба"], "en": ["Pump", "Dump", "Both"]}
-intervals = ["30", "60", "120"]
-thresholds = ["1", "2", "5", "10"]
+EXCHANGES = ["Binance", "Bybit", "MEXC", "BingX"]
+MARKETS = ["spot", "futures"]
+THRESHOLDS = ["1%", "3%", "5%", "10%"]
+TIMEFRAMES = ["1m", "5m", "15m"]
 
-# ================ KEYBOARD ====================
+# ========== KEYBOARD ==========
 def get_keyboard(lang):
-    return ReplyKeyboardMarkup(texts[lang]["main_menu"], resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        texts[lang]["main_menu"],
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
 
-# ================ CAPTCHA & START ====================
+def confirm_keyboard(options, lang):
+    return ReplyKeyboardMarkup(
+        [[opt] for opt in options] + [[texts[lang]["back"]]],
+        resize_keyboard=True
+    )
+
+# ========== HANDLERS ==========
 def start(update: Update, context: CallbackContext):
-    uid = update.effective_user.id
-    user_data[uid] = {
-        "verified": False, "lang": "en", "exchange": "Binance", "market": "Spot",
-        "notif": "Both", "interval": 60, "threshold": 2
+    user_id = update.effective_user.id
+    user_data[user_id] = {
+        "verified": False,
+        "lang": "en",
+        "exchange": "Binance",
+        "market": "spot",
+        "threshold": "3%",
+        "timeframe": "1m"
     }
-    context.bot.send_message(uid, texts["en"]["start"],
-        reply_markup=ReplyKeyboardMarkup([["✅ I'm not a bot"]], resize_keyboard=True))
 
-# ================ HANDLER ====================
+    context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=texts["en"]["start"],
+        reply_markup=ReplyKeyboardMarkup([["✅ I'm not a bot"]], resize_keyboard=True)
+    )
+
 def handle_text(update: Update, context: CallbackContext):
-    uid = update.effective_user.id
-    msg = update.message.text
-    data = user_data.get(uid, {})
-    lang = data.get("lang", "en")
+    user_id = update.effective_user.id
+    text = update.message.text
+    lang = user_data.get(user_id, {}).get("lang", "en")
 
     # CAPTCHA
-    if not data.get("verified"):
-        if msg in ["✅ I'm not a bot", "✅ Я не бот"]:
-            user_data[uid]["verified"] = True
-            context.bot.send_message(uid, texts[lang]["captcha_passed"], reply_markup=get_keyboard(lang))
+    if not user_data.get(user_id, {}).get("verified"):
+        if text in ["✅ I'm not a bot", "✅ Я не бот"]:
+            user_data[user_id]["verified"] = True
+            context.bot.send_message(chat_id=update.effective_chat.id,
+                                     text=texts[lang]["captcha_passed"],
+                                     reply_markup=get_keyboard(lang))
         else:
-            context.bot.send_message(uid, texts[lang]["not_verified"])
+            context.bot.send_message(chat_id=update.effective_chat.id,
+                                     text="🚫 Please verify first." if lang == "en" else "🚫 Сначала пройдите верификацию.")
         return
 
-    # LANGUAGE
-    if msg in ["🌐 Language", "🌐 Язык"]:
-        kb = [["English", "Русский"]]
-        context.bot.send_message(uid, texts[lang]["select_lang"],
-            reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
-    elif msg in ["English", "Русский"]:
-        new_lang = "ru" if msg == "Русский" else "en"
-        user_data[uid]["lang"] = new_lang
-        context.bot.send_message(uid, texts[new_lang]["language_selected"],
-            reply_markup=get_keyboard(new_lang))
-    elif msg in ["⚙️ Settings", "⚙️ Настройки"]:
-        d = user_data[uid]
-        s = texts[lang]["current_settings"].format(
-            exchange=d["exchange"], market=d["market"],
-            threshold=d["threshold"], interval=d["interval"],
-            notif=d["notif"]
-        )
-        context.bot.send_message(uid, s, reply_markup=get_keyboard(lang))
-    elif msg in ["📈 Exchange", "📈 Биржа"]:
-        context.bot.send_message(uid, texts[lang]["select_exchange"],
-            reply_markup=ReplyKeyboardMarkup([[e] for e in exchanges], resize_keyboard=True))
-    elif msg in exchanges:
-        user_data[uid]["exchange"] = msg
-        context.bot.send_message(uid, texts[lang]["confirm"] + msg, reply_markup=get_keyboard(lang))
-    elif msg in ["📊 Market", "📊 Рынок"]:
-        context.bot.send_message(uid, texts[lang]["select_market"],
-            reply_markup=ReplyKeyboardMarkup([[m] for m in markets[lang]], resize_keyboard=True))
-    elif msg in markets[lang]:
-        user_data[uid]["market"] = msg
-        context.bot.send_message(uid, texts[lang]["confirm"] + msg, reply_markup=get_keyboard(lang))
-    elif msg in ["🔔 Notifications", "🔔 Уведомления"]:
-        context.bot.send_message(uid, texts[lang]["select_notify_type"],
-            reply_markup=ReplyKeyboardMarkup([[t] for t in notify_types[lang]], resize_keyboard=True))
-    elif msg in notify_types[lang]:
-        user_data[uid]["notif"] = msg
-        context.bot.send_message(uid, texts[lang]["select_tf"],
-            reply_markup=ReplyKeyboardMarkup([[i] for i in intervals], resize_keyboard=True))
-    elif msg in intervals:
-        user_data[uid]["interval"] = int(msg)
-        context.bot.send_message(uid, texts[lang]["select_threshold"],
-            reply_markup=ReplyKeyboardMarkup([[t] for t in thresholds], resize_keyboard=True))
-    elif msg in thresholds:
-        user_data[uid]["threshold"] = float(msg)
-        context.bot.send_message(uid, texts[lang]["confirm"] + msg + " %", reply_markup=get_keyboard(lang))
+    # Язык
+    if text in ["🌐 Language", "🌐 Язык"]:
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text="Choose language / Выберите язык:",
+                                 reply_markup=ReplyKeyboardMarkup([["English", "Русский"]], resize_keyboard=True))
+    elif text in ["English", "Русский"]:
+        user_data[user_id]["lang"] = "en" if text == "English" else "ru"
+        lang = user_data[user_id]["lang"]
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=texts[lang]["language_selected"],
+                                 reply_markup=get_keyboard(lang))
+
+    # Настройки
+    elif text in ["⚙️ Settings", "⚙️ Настройки"]:
+        u = user_data[user_id]
+        settings_text = f"""{texts[lang]["current_settings"]}
+📊 Exchange: {u['exchange']}
+📈 Market: {texts[lang][u['market']]}
+📉 Threshold: {u['threshold']}
+⏱ Timeframe: {u['timeframe']}"""
+        context.bot.send_message(chat_id=update.effective_chat.id, text=settings_text)
+
+    # Биржа
+    elif text in ["📊 Exchange", "📊 Биржа"]:
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=texts[lang]["select_exchange"],
+                                 reply_markup=confirm_keyboard(EXCHANGES, lang))
+    elif text in EXCHANGES:
+        user_data[user_id]["exchange"] = text
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=texts[lang]["confirm"] + text,
+                                 reply_markup=get_keyboard(lang))
+
+    # Рынок
+    elif text in ["📈 Market", "📈 Рынок"]:
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=texts[lang]["select_market"],
+                                 reply_markup=confirm_keyboard([texts[lang]["spot"], texts[lang]["futures"]], lang))
+    elif text in [texts[lang]["spot"], texts[lang]["futures"]]:
+        user_data[user_id]["market"] = "spot" if text == texts[lang]["spot"] else "futures"
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=texts[lang]["confirm"] + text,
+                                 reply_markup=get_keyboard(lang))
+
+    # Порог
+    elif text in ["📉 Threshold", "📉 Порог"]:
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=texts[lang]["select_threshold"],
+                                 reply_markup=confirm_keyboard(THRESHOLDS, lang))
+    elif text in THRESHOLDS:
+        user_data[user_id]["threshold"] = text
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=texts[lang]["confirm"] + text,
+                                 reply_markup=get_keyboard(lang))
+
+    # Таймфрейм
+    elif text in ["⏱ Timeframe", "⏱ Таймфрейм"]:
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=texts[lang]["select_timeframe"],
+                                 reply_markup=confirm_keyboard(TIMEFRAMES, lang))
+    elif text in TIMEFRAMES:
+        user_data[user_id]["timeframe"] = text
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=texts[lang]["confirm"] + text,
+                                 reply_markup=get_keyboard(lang))
+
+    elif text == texts[lang]["back"]:
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=texts[lang]["menu"],
+                                 reply_markup=get_keyboard(lang))
     else:
-        context.bot.send_message(uid, texts[lang]["confirm"] + msg, reply_markup=get_keyboard(lang))
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text=texts[lang]["confirm"] + text,
+                                 reply_markup=get_keyboard(lang))
 
-# ================ MONITORING ====================
-def fetch_price(exchange, market, symbol="BTCUSDT"):
-    try:
-        if exchange == "Binance":
-            url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-            return float(requests.get(url, timeout=5).json()["price"])
-        # Реализация аналогично для Bybit, MEXC, BingX
-    except Exception as e:
-        logging.warning(f"{exchange} error: {e}")
-        return None
+# ========== PRICE MONITOR ==========
+def price_monitor():
+    while True:
+        for user_id, data in user_data.items():
+            if not data.get("verified"):
+                continue
 
-def monitor_prices():
-    for uid, data in user_data.items():
-        if not data.get("verified"):
-            continue
-        exchange = data["exchange"]
-        symbol = "BTCUSDT"  # можно расширить
-        market = data["market"]
-        notif = data["notif"]
-        interval = data["interval"]
-        threshold = data["threshold"]
+            exchange = data["exchange"]
+            market = data["market"]
+            timeframe = data["timeframe"]
+            threshold = float(data["threshold"].replace("%", ""))
 
-        current = fetch_price(exchange, market, symbol)
-        prev = data.get("prev_price", current)
-        if not current or not prev:
-            continue
+            # Placeholder: Replace with real API data
+            price_change = 5.0  # ← simulate
 
-        diff = ((current - prev) / prev) * 100
-        data["prev_price"] = current
+            if price_change >= threshold:
+                lang = data["lang"]
+                msg = f"🚀 {exchange} {market.upper()} detected pump: +{price_change}%"
+                bot.send_message(chat_id=user_id, text=msg)
+        time.sleep(60)
 
-        lang = data["lang"]
-        is_pump = diff >= threshold
-        is_dump = diff <= -threshold
+threading.Thread(target=price_monitor, daemon=True).start()
 
-        if (notif in ["Pump", "Памп", "Both", "Оба"] and is_pump) or            (notif in ["Dump", "Дамп", "Both", "Оба"] and is_dump):
-            direction = "📈 Памп" if is_pump else "📉 Дамп"
-            msg = f"{direction} на {exchange} ({market}):
-Цена: {current:.2f}
-Изменение: {diff:.2f}%"
-            bot.send_message(uid, msg)
-
-scheduler.add_job(monitor_prices, "interval", seconds=30)
-
-# ================ FLASK ====================
+# ========== FLASK ROUTES ==========
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), bot)
@@ -211,11 +238,13 @@ def webhook():
 def index():
     return "Bot is running."
 
+# ========== MAIN ==========
 def main():
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+
     bot.set_webhook(url=WEBHOOK_URL)
     app.run(host="0.0.0.0", port=PORT)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
