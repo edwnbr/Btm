@@ -110,13 +110,20 @@ def exchange_keyboard():
         [InlineKeyboardButton("💰 BingX", callback_data='exchange_bing')],
     ])
 
-def interval_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("30 сек", callback_data='interval_30')],
-        [InlineKeyboardButton("60 сек", callback_data='interval_60')],
-        [InlineKeyboardButton("120 сек", callback_data='interval_120')],
-        [InlineKeyboardButton("300 сек", callback_data='interval_300')],
-    ])
+def interval_keyboard(chat_id):
+    # Варианты интервалов с надписями на языке пользователя
+    intervals = [
+        (30, "30 сек", "30 sec"),
+        (60, "60 сек", "60 sec"),
+        (120, "120 сек", "120 sec"),
+        (300, "300 сек", "300 sec")
+    ]
+    buttons = []
+    lang = get_lang(chat_id)
+    for sec, ru_label, en_label in intervals:
+        label = ru_label if lang == 'ru' else en_label
+        buttons.append([InlineKeyboardButton(label, callback_data=f'interval_{sec}')])
+    return InlineKeyboardMarkup(buttons)
 
 def filter_keyboard(chat_id):
     lang = get_lang(chat_id)
@@ -172,32 +179,32 @@ def button_handler(update: Update, context: CallbackContext):
     elif data == 'show_exchange':
         query.edit_message_text(t(chat_id, 'choose_exchange'), reply_markup=exchange_keyboard())
     elif data == 'show_interval':
-        query.edit_message_text(t(chat_id, 'ask_threshold'), reply_markup=interval_keyboard())
+        query.edit_message_text(t(chat_id, 'ask_threshold'), reply_markup=interval_keyboard(chat_id))
     elif data == 'show_filter':
         query.edit_message_text(t(chat_id, 'menu'), reply_markup=filter_keyboard(chat_id))
 
     elif data.startswith('lang_'):
         lang_code = data.split('_')[1]
         user_settings.setdefault(chat_id, {})['lang'] = lang_code
-        query.edit_message_text(t(chat_id, 'lang_set'))
-        context.bot.send_message(chat_id, t(chat_id, 'menu'), reply_markup=main_menu_keyboard(chat_id))
+        # После смены языка обновляем меню на новом языке
+        query.edit_message_text(t(chat_id, 'lang_set'), reply_markup=main_menu_keyboard(chat_id))
 
     elif data.startswith('exchange_'):
         exch_code = data.split('_')[1]
         user_settings.setdefault(chat_id, {})['exchange'] = exch_code
-        query.edit_message_text(t(chat_id, 'exchange_set', exchange=exch_code.upper()))
+        query.edit_message_text(t(chat_id, 'exchange_set', exchange=exch_code.upper()), reply_markup=main_menu_keyboard(chat_id))
 
     elif data.startswith('interval_'):
         sec = int(data.split('_')[1])
         user_settings.setdefault(chat_id, {})['interval'] = sec
-        query.edit_message_text(t(chat_id, 'interval_set', seconds=sec))
+        query.edit_message_text(t(chat_id, 'interval_set', seconds=sec), reply_markup=main_menu_keyboard(chat_id))
 
     elif data.startswith('filter_'):
         filt = data.split('_')[1]
         if filt in ('pump', 'dump', 'all'):
             user_settings.setdefault(chat_id, {})['filter'] = filt
             filter_name = t(chat_id, filt + '_only') if filt != 'all' else t(chat_id, 'all')
-            query.edit_message_text(t(chat_id, 'filter_set', filter=filter_name))
+            query.edit_message_text(t(chat_id, 'filter_set', filter=filter_name), reply_markup=main_menu_keyboard(chat_id))
 
     elif data.startswith('captcha_'):
         handle_captcha(update, context)
@@ -210,22 +217,48 @@ def emoji_captcha(update: Update, context: CallbackContext):
     if target not in options:
         options[0] = target
     random.shuffle(options)
-    buttons = [[InlineKeyboardButton(e, callback_data=f'captcha_{e}')] for e in options]
-    context.user_data['captcha_target'] = target
-    update.effective_message.reply_text(t(chat_id, 'captcha', target=target), reply_markup=InlineKeyboardMarkup(buttons))
+    buttons = []
+    for idx, emoji in enumerate(options):
+        buttons.append([InlineKeyboardButton(emoji, callback_data=f'captcha_{idx}')])
+    context.user_data['captcha_target_emoji'] = target
+    context.user_data['captcha_options'] = options
+    # Отправляем сообщение с кнопками эмоджи капчи
+    if update.callback_query:
+        update.callback_query.edit_message_text(
+            t(chat_id, 'captcha', target=target),
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+    else:
+        update.message.reply_text(
+            t(chat_id, 'captcha', target=target),
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
 
 def handle_captcha(update: Update, context: CallbackContext):
     query = update.callback_query
     chat_id = query.message.chat.id
-    selected = query.data.replace('captcha_', '')
-    target = context.user_data.get('captcha_target')
-    if selected == target:
-        user_settings[chat_id]['captcha_passed'] = True
-        query.edit_message_text(t(chat_id, 'captcha_pass'), reply_markup=main_menu_keyboard(chat_id))
+    selected_idx = int(query.data.replace('captcha_', ''))
+    options = context.user_data.get('captcha_options', [])
+    target_emoji = context.user_data.get('captcha_target_emoji')
+
+    if options and 0 <= selected_idx < len(options):
+        selected_emoji = options[selected_idx]
+        if selected_emoji == target_emoji:
+            if chat_id not in user_settings:
+                user_settings[chat_id] = {}
+            user_settings[chat_id]['captcha_passed'] = True
+            query.edit_message_text(t(chat_id, 'captcha_pass'), reply_markup=main_menu_keyboard(chat_id))
+        else:
+            query.edit_message_text(t(chat_id, 'captcha_fail'), reply_markup=None)
+            # Немного задержки, потом новая капча
+            time.sleep(1)
+            emoji_captcha(update, context)
     else:
-        query.edit_message_text(t(chat_id, 'captcha_fail'))
+        query.edit_message_text(t(chat_id, 'captcha_fail'), reply_markup=None)
+        time.sleep(1)
         emoji_captcha(update, context)
 
+# Функция проверки подозрительных объёмов
 def check_suspicious_volume(current_volume, avg_volume, threshold=3.0):
     if avg_volume == 0:
         return False
@@ -258,6 +291,7 @@ def monitor_loop():
                 elif exchange == 'bin':
                     url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
                     data = requests.get(url, timeout=10).json()
+                    # Фильтруем фьючерсы
                     data = [coin for coin in data if coin['symbol'].endswith('USDT') or coin['symbol'].endswith('PERP')]
                 elif exchange == 'ku':
                     url = 'https://api-futures.kucoin.com/api/v1/contract/ticker'
@@ -278,71 +312,3 @@ def monitor_loop():
                     symbol = coin.get('symbol') or coin.get('contractCode') or coin.get('symbolName') or coin.get('name')
                     if not symbol:
                         continue
-
-                    symbol_upper = symbol.upper()
-                    if exchange == 'bin' and not (symbol_upper.endswith('USDT') or symbol_upper.endswith('PERP')):
-                        continue
-
-                    price = float(coin.get('lastPrice', coin.get('lastDealPrice', 0) or 0))
-                    open_price = float(coin.get('openPrice', coin.get('prevPrice24h', 0) or 0))
-                    volume = float(coin.get('volume', coin.get('turnover', 0) or 0))
-
-                    if open_price == 0 or volume == 0:
-                        continue
-
-                    change_percent = ((price - open_price) / open_price) * 100
-
-                    if filter_type == 'pump' and change_percent < 0:
-                        continue
-                    if filter_type == 'dump' and change_percent > 0:
-                        continue
-
-                    if abs(change_percent) >= threshold:
-                        emoji = "🚀" if change_percent > 0 else "📉"
-                        text_key = 'alert_pump' if change_percent > 0 else 'alert_dump'
-                        msg = t(chat_id, text_key, percent=change_percent, seconds=interval, emoji=emoji)
-                        context.bot.send_message(chat_id, msg)
-                        user_settings[chat_id]['last_notify'] = now
-
-                    vol_hist = volume_history.setdefault(chat_id, {}).setdefault(symbol, [])
-                    vol_hist.append(volume)
-                    if len(vol_hist) > 10:
-                        vol_hist.pop(0)
-                    avg_vol = sum(vol_hist) / len(vol_hist)
-
-                    if check_suspicious_volume(volume, avg_vol):
-                        if abs(change_percent) < 0.5:
-                            context.bot.send_message(chat_id, f"{t(chat_id, 'suspicious_alert')} {symbol} - объем: {volume:.2f}")
-                            user_settings[chat_id]['last_notify'] = now
-
-            except Exception as e:
-                print(f"Error monitoring {exchange}: {e}")
-
-        time.sleep(5)
-
-updater = Updater(BOT_TOKEN, use_context=True)
-dispatcher = updater.dispatcher
-
-dispatcher.add_handler(CommandHandler('start', start))
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, text_handler))
-dispatcher.add_handler(CallbackQueryHandler(button_handler))
-
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "✅ Bot is running!"
-
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
-
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.start()
-
-if __name__ == '__main__':
-    keep_alive()
-    monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
-    monitor_thread.start()
-    updater.start_polling()
-    updater.idle()
