@@ -11,8 +11,11 @@ from telegram.ext import (
 )
 
 # ===================== CONFIG =====================
-BOT_TOKEN = '7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE'
-WEBHOOK_HOST = 'https://btm-c4tt.onrender.com'  # Укажи свой render URL
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN not set in environment!")
+
+WEBHOOK_HOST = f'https://{os.environ.get("https://btm-c4tt.onrender.com")}'
 WEBHOOK_PATH = f"/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 PORT = int(os.environ.get("PORT", 8443))
@@ -22,7 +25,7 @@ logging.basicConfig(level=logging.INFO)
 user_settings = {}
 volume_history = {}
 
-# ===================== ЛОКАЛИЗАЦИЯ =====================
+# ===================== LOCALIZATION =====================
 LANGUAGES = {
     'en': {
         'start': "👋 Welcome! Please verify you are human.",
@@ -163,9 +166,8 @@ if __name__ == '__main__':
         listen="0.0.0.0",
         port=PORT,
         url_path=BOT_TOKEN,
-        webhook_url=WEBHOOK_URL  # Telegram requires HTTPS
+        webhook_url=WEBHOOK_URL
     )
 
     threading.Thread(target=monitor_loop, args=(updater.bot,), daemon=True).start()
-
     updater.idle()
