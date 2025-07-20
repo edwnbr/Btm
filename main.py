@@ -1,218 +1,225 @@
+import logging
+import json
 import os
 import time
-import json
-import logging
-import random
 import requests
 import threading
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    Updater, CommandHandler, CallbackContext,
-    CallbackQueryHandler, MessageHandler, Filters
+import asyncio
+import aiohttp
+from flask import Flask, request
+from telegram import (
+    Bot,
+    Update,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    KeyboardButton,
 )
+from telegram.ext import (
+    Updater,
+    CommandHandler,
+    MessageHandler,
+    Filters,
+    CallbackContext,
+    Dispatcher,
+)
+from apscheduler.schedulers.background import BackgroundScheduler
 
-# === CONFIG ===
+# ===================== CONFIG =====================
 BOT_TOKEN = "7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE"
 RENDER_EXTERNAL_HOSTNAME = "btm-c4tt.onrender.com"
-WEBHOOK_URL = f"https://{RENDER_EXTERNAL_HOSTNAME}/{BOT_TOKEN}"
+
+WEBHOOK_HOST = f"https://{RENDER_EXTERNAL_HOSTNAME}"
+WEBHOOK_PATH = f"/{BOT_TOKEN}"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 PORT = 8443
 
-# === GLOBALS ===
-user_settings = {}
-volume_history = {}
-supported_exchanges = ['Binance', 'Bybit', 'MEXC', 'BingX', 'KuCoin', 'OKX']
+LANGUAGES = ["EN", "RU"]
+DEFAULT_SETTINGS = {
+    "language": "EN",
+    "exchange": "Binance",
+    "market_type": "spot",
+    "alert_type": "both",
+    "timeframe": "1m",
+    "threshold": 1.0
+}
 
-# === LANG ===
-LANGUAGES = {
-    'en': {
-        'start': "👋 Welcome! Please verify you are human.",
-        'captcha': "🤖 Tap the emoji: {target}",
-        'captcha_pass': "✅ Verified!",
-        'captcha_fail': "❌ Wrong emoji. Try again.",
-        'captcha_required': "❗️ Please complete the captcha first.",
-        'select_lang': "🌐 Choose your language:",
-        'select_exchange': "💱 Choose exchange:",
-        'select_threshold': "📈 Select threshold (%):",
-        'select_interval': "⏱️ Select interval:",
-        'select_alert_type': "🔔 Alert type:",
-        'alert_pump': "🚀 {symbol}: +{percent:.2f}% in {seconds}s",
-        'alert_dump': "📉 {symbol}: -{percent:.2f}% in {seconds}s",
-        'suspicious_alert': "⚠️ Suspicious volume spike detected!",
-        'verified': "✅ You are verified.",
+LANG = {
+    "EN": {
+        "start": "â Please verify you're human:",
+        "verified": "â Verified! Choose an option:",
+        "select_lang": "ð Select language:",
+        "main_menu": "Main Menu",
+        "exchange_set": "ð Exchange set to:",
+        "market_set": "ð Market type set to:",
+        "alert_set": "ð Alert type set to:",
+        "timeframe_set": "â±ï¸ Timeframe set to:",
+        "threshold_set": "ð Threshold set to:",
+        "settings": "âï¸ Your Settings:
+",
+        "pump": "ð Pump",
+        "dump": "ð Dump"
     },
-    'ru': {
-        'start': "👋 Добро пожаловать! Пожалуйста, подтвердите, что вы человек.",
-        'captcha': "🤖 Нажмите на смайлик: {target}",
-        'captcha_pass': "✅ Верификация пройдена!",
-        'captcha_fail': "❌ Неверный смайлик. Попробуйте снова.",
-        'captcha_required': "❗️ Пожалуйста, сначала пройдите капчу.",
-        'select_lang': "🌐 Выберите язык:",
-        'select_exchange': "💱 Выберите биржу:",
-        'select_threshold': "📈 Выберите порог (%):",
-        'select_interval': "⏱️ Выберите интервал:",
-        'select_alert_type': "🔔 Тип уведомлений:",
-        'alert_pump': "🚀 {symbol}: +{percent:.2f}% за {seconds}с",
-        'alert_dump': "📉 {symbol}: -{percent:.2f}% за {seconds}с",
-        'suspicious_alert': "⚠️ Обнаружен подозрительный всплеск объема!",
-        'verified': "✅ Вы прошли верификацию.",
+    "RU": {
+        "start": "â ÐÐ¾Ð¶Ð°Ð»ÑÐ¹ÑÑÐ°, Ð¿Ð¾Ð´ÑÐ²ÐµÑÐ´Ð¸ÑÐµ, ÑÑÐ¾ Ð²Ñ Ð½Ðµ ÑÐ¾Ð±Ð¾Ñ:",
+        "verified": "â ÐÐµÑÐ¸ÑÐ¸ÐºÐ°ÑÐ¸Ñ Ð¿ÑÐ¾Ð¹Ð´ÐµÐ½Ð°! ÐÑÐ±ÐµÑÐ¸ÑÐµ Ð¾Ð¿ÑÐ¸Ñ:",
+        "select_lang": "ð ÐÑÐ±ÐµÑÐ¸ÑÐµ ÑÐ·ÑÐº:",
+        "main_menu": "ÐÐ»Ð°Ð²Ð½Ð¾Ðµ Ð¼ÐµÐ½Ñ",
+        "exchange_set": "ð ÐÐ¸ÑÐ¶Ð° ÑÑÑÐ°Ð½Ð¾Ð²Ð»ÐµÐ½Ð°:",
+        "market_set": "ð Ð¢Ð¸Ð¿ ÑÑÐ½ÐºÐ° ÑÑÑÐ°Ð½Ð¾Ð²Ð»ÐµÐ½:",
+        "alert_set": "ð Ð¢Ð¸Ð¿ ÑÐ²ÐµÐ´Ð¾Ð¼Ð»ÐµÐ½Ð¸Ð¹:",
+        "timeframe_set": "â±ï¸ Ð¢Ð°Ð¹Ð¼ÑÑÐµÐ¹Ð¼:",
+        "threshold_set": "ð ÐÐ¾ÑÐ¾Ð³ Ð¸Ð·Ð¼ÐµÐ½ÐµÐ½Ð¸Ñ:",
+        "settings": "âï¸ ÐÐ°ÑÐ¸ Ð½Ð°ÑÑÑÐ¾Ð¹ÐºÐ¸:
+",
+        "pump": "ð ÐÐ°Ð¼Ð¿",
+        "dump": "ð ÐÐ°Ð¼Ð¿"
     }
 }
 
-def t(chat_id, key, **kwargs):
-    lang = user_settings.get(chat_id, {}).get("lang", "en")
-    return LANGUAGES.get(lang, LANGUAGES["en"]).get(key, key).format(**kwargs)
+# ===================== STORAGE =====================
+users = {}
+verified_users = set()
+app = Flask(__name__)
+bot = Bot(token=BOT_TOKEN)
 
-def emoji_captcha(update: Update, context: CallbackContext):
-    chat_id = update.effective_chat.id
-    emojis = ["🐶", "🐱", "🐭", "🐰", "🦊"]
-    target = random.choice(emojis)
-    options = random.sample(emojis, 4)
-    if target not in options:
-        options[0] = target
-    random.shuffle(options)
+# ===================== HELPERS =====================
+def get_keyboard(lang):
+    l = LANG[lang]
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("ð Exchange"), KeyboardButton("ð Market")],
+        [KeyboardButton("ð Alerts"), KeyboardButton("â±ï¸ Timeframe")],
+        [KeyboardButton("ð Threshold"), KeyboardButton("âï¸ My Settings")],
+        [KeyboardButton("ð Language")]
+    ], resize_keyboard=True)
 
-    context.user_data['captcha_target_emoji'] = target
-    context.user_data['captcha_options'] = options
+def get_user_settings(uid):
+    if uid not in users:
+        users[uid] = DEFAULT_SETTINGS.copy()
+    return users[uid]
 
-    buttons = [[InlineKeyboardButton(e, callback_data=f'captcha_{i}')] for i, e in enumerate(options)]
-    msg = t(chat_id, 'captcha', target=target)
+def fetch_price_from_binance():
+    try:
+        resp = requests.get("https://api.binance.com/api/v3/ticker/price")
+        data = resp.json()
+        if isinstance(data, list):
+            return {item["symbol"]: float(item["price"]) for item in data if "price" in item}
+    except Exception as e:
+        logging.warning(f"Binance error: {e}")
+    return {}
 
-    if update.callback_query:
-        update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(buttons))
-    else:
-        update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(buttons))
-
-def handle_captcha(update: Update, context: CallbackContext):
-    query = update.callback_query
-    chat_id = query.message.chat.id
-    idx = int(query.data.replace('captcha_', ''))
-    options = context.user_data.get('captcha_options', [])
-    target = context.user_data.get('captcha_target_emoji')
-
-    if 0 <= idx < len(options) and options[idx] == target:
-        user_settings.setdefault(chat_id, {})['captcha_passed'] = True
-        query.edit_message_text(t(chat_id, 'captcha_pass'))
-        show_settings_menu(update, context)
-    else:
-        query.edit_message_text(t(chat_id, 'captcha_fail'))
-        emoji_captcha(update, context)
-
+# ===================== HANDLERS =====================
 def start(update: Update, context: CallbackContext):
-    chat_id = update.effective_chat.id
-    user_settings[chat_id] = {
-        'lang': 'en',
-        'exchange': 'Binance',
-        'threshold': 5.0,
-        'interval': 60,
-        'alert_type': 'both',
-        'captcha_passed': False
-    }
-    update.message.reply_text(t(chat_id, 'start'))
-    emoji_captcha(update, context)
+    user_id = update.effective_user.id
+    update.message.reply_text(LANG["EN"]["start"], reply_markup=ReplyKeyboardMarkup(
+        [[KeyboardButton("â I'm human")]], resize_keyboard=True))
+    users[user_id] = DEFAULT_SETTINGS.copy()
+
+def verify(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    verified_users.add(user_id)
+    lang = users[user_id]["language"]
+    update.message.reply_text(LANG[lang]["verified"], reply_markup=get_keyboard(lang))
 
 def text_handler(update: Update, context: CallbackContext):
-    chat_id = update.effective_chat.id
-    if not user_settings.get(chat_id, {}).get('captcha_passed', False):
-        update.message.reply_text(t(chat_id, 'captcha_required'))
-        emoji_captcha(update, context)
-    else:
-        update.message.reply_text(t(chat_id, 'verified'))
-        show_settings_menu(update, context)
-
-def button_handler(update: Update, context: CallbackContext):
-    query = update.callback_query
-    chat_id = query.message.chat.id
-    data = query.data
-
-    if data.startswith("captcha_"):
-        handle_captcha(update, context)
+    user_id = update.effective_user.id
+    if user_id not in verified_users:
+        update.message.reply_text(LANG["EN"]["start"])
         return
 
-    if not user_settings.get(chat_id, {}).get("captcha_passed"):
-        query.answer(t(chat_id, "captcha_required"))
+    msg = update.message.text
+    settings = get_user_settings(user_id)
+    lang = settings["language"]
+    l = LANG[lang]
+
+    if msg == "ð Language":
+        settings["language"] = "RU" if lang == "EN" else "EN"
+        update.message.reply_text(l["select_lang"], reply_markup=get_keyboard(settings["language"]))
+    elif msg == "ð Exchange":
+        settings["exchange"] = "Bybit" if settings["exchange"] == "Binance" else "Binance"
+        update.message.reply_text(f"{l['exchange_set']} {settings['exchange']}")
+    elif msg == "ð Market":
+        settings["market_type"] = "futures" if settings["market_type"] == "spot" else "spot"
+        update.message.reply_text(f"{l['market_set']} {settings['market_type']}")
+    elif msg == "ð Alerts":
+        options = ["pump", "dump", "both"]
+        current = options.index(settings["alert_type"])
+        settings["alert_type"] = options[(current + 1) % 3]
+        update.message.reply_text(f"{l['alert_set']} {settings['alert_type']}")
+    elif msg == "â±ï¸ Timeframe":
+        tfs = ["1m", "5m", "15m"]
+        i = tfs.index(settings["timeframe"])
+        settings["timeframe"] = tfs[(i + 1) % len(tfs)]
+        update.message.reply_text(f"{l['timeframe_set']} {settings['timeframe']}")
+    elif msg == "ð Threshold":
+        thresholds = [0.5, 1.0, 2.0, 5.0]
+        i = thresholds.index(settings["threshold"]) if settings["threshold"] in thresholds else 0
+        settings["threshold"] = thresholds[(i + 1) % len(thresholds)]
+        update.message.reply_text(f"{l['threshold_set']} {settings['threshold']}%")
+    elif msg == "âï¸ My Settings":
+        s = users[user_id]
+        text = f"{l['settings']}"                f"
+ð Language: {s['language']}"                f"
+ð Exchange: {s['exchange']}"                f"
+ð Market: {s['market_type']}"                f"
+ð Alerts: {s['alert_type']}"                f"
+â±ï¸ Timeframe: {s['timeframe']}"                f"
+ð Threshold: {s['threshold']}%"
+        update.message.reply_text(text)
+
+# ===================== MONITOR =====================
+prev_prices = {}
+
+def monitor():
+    global prev_prices
+    current_prices = fetch_price_from_binance()
+    if not current_prices:
         return
 
-    if data.startswith("lang_"):
-        lang = data.split("_")[1]
-        user_settings[chat_id]["lang"] = lang
-        query.answer("Language set.")
-        show_settings_menu(update, context)
+    for user_id in verified_users:
+        s = get_user_settings(user_id)
+        symbols = ["BTCUSDT", "ETHUSDT"]
+        for sym in symbols:
+            if sym in current_prices and sym in prev_prices:
+                old = prev_prices[sym]
+                new = current_prices[sym]
+                change = ((new - old) / old) * 100
+                threshold = s["threshold"]
+                lang = s["language"]
+                l = LANG[lang]
+                if change >= threshold and s["alert_type"] in ["pump", "both"]:
+                    bot.send_message(user_id, f"{l['pump']} {sym}: +{round(change, 2)}%")
+                elif change <= -threshold and s["alert_type"] in ["dump", "both"]:
+                    bot.send_message(user_id, f"{l['dump']} {sym}: {round(change, 2)}%")
 
-    elif data.startswith("exch_"):
-        exchange = data.split("_")[1]
-        user_settings[chat_id]["exchange"] = exchange
-        query.answer("Exchange set.")
-        show_settings_menu(update, context)
+    prev_prices = current_prices
 
-    elif data.startswith("th_"):
-        user_settings[chat_id]["threshold"] = float(data.split("_")[1])
-        query.answer("Threshold updated.")
-        show_settings_menu(update, context)
+# ===================== FLASK WEBHOOK =====================
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    dp.process_update(update)
+    return "ok"
 
-    elif data.startswith("int_"):
-        user_settings[chat_id]["interval"] = int(data.split("_")[1])
-        query.answer("Interval updated.")
-        show_settings_menu(update, context)
+@app.route("/")
+def index():
+    return "Bot is running"
 
-    elif data.startswith("alert_"):
-        user_settings[chat_id]["alert_type"] = data.split("_")[1]
-        query.answer("Alert type set.")
-        show_settings_menu(update, context)
+# ===================== INIT =====================
+updater = Updater(BOT_TOKEN, use_context=True)
+dp: Dispatcher = updater.dispatcher
+dp.add_handler(CommandHandler("start", start))
+dp.add_handler(MessageHandler(Filters.regex("human"), verify))
+dp.add_handler(MessageHandler(Filters.text & ~Filters.command, text_handler))
 
-def show_settings_menu(update: Update, context: CallbackContext):
-    chat_id = update.effective_chat.id
-    lang = user_settings[chat_id].get("lang", "en")
+scheduler = BackgroundScheduler()
+scheduler.add_job(monitor, "interval", seconds=30)
+scheduler.start()
 
-    buttons = [
-        [InlineKeyboardButton("🌐 Русский" if lang == "ru" else "🌐 English", callback_data="lang_ru" if lang == "en" else "lang_en")],
-        [InlineKeyboardButton("💱 " + t(chat_id, 'select_exchange'), callback_data="exch_Binance")],
-        [InlineKeyboardButton("📈 2%", callback_data="th_2"), InlineKeyboardButton("📈 5%", callback_data="th_5")],
-        [InlineKeyboardButton("⏱️ 30s", callback_data="int_30"), InlineKeyboardButton("⏱️ 60s", callback_data="int_60")],
-        [InlineKeyboardButton("🚀", callback_data="alert_pump"), InlineKeyboardButton("📉", callback_data="alert_dump"), InlineKeyboardButton("🔁", callback_data="alert_both")]
-    ]
-    context.bot.send_message(chat_id, t(chat_id, "select_lang"), reply_markup=InlineKeyboardMarkup(buttons))
+# Set webhook
+bot.delete_webhook()
+time.sleep(1)
+bot.set_webhook(WEBHOOK_URL)
 
-def monitor_loop(bot):
-    while True:
-        time.sleep(5)
-        for chat_id, settings in user_settings.items():
-            if not settings.get('captcha_passed'):
-                continue
-            try:
-                response = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10)
-                data = response.json()
-                data = [d for d in data if d.get("symbol", "").endswith("USDT")]
-                for coin in data[:10]:
-                    symbol = coin["symbol"]
-                    price = float(coin["lastPrice"])
-                    change_percent = float(coin["priceChangePercent"])
-                    if abs(change_percent) >= settings["threshold"]:
-                        if settings["alert_type"] == "pump" and change_percent < 0:
-                            continue
-                        if settings["alert_type"] == "dump" and change_percent > 0:
-                            continue
-                        bot.send_message(chat_id, t(chat_id, "alert_pump" if change_percent > 0 else "alert_dump",
-                                                    symbol=symbol, percent=change_percent, seconds=settings["interval"]))
-            except Exception as e:
-                logging.warning(f"Monitor error: {e}")
-
-def main():
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
-
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, text_handler))
-    dp.add_handler(CallbackQueryHandler(button_handler))
-
-    updater.start_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=BOT_TOKEN,
-        webhook_url=WEBHOOK_URL
-    )
-
-    threading.Thread(target=monitor_loop, args=(updater.bot,), daemon=True).start()
-    updater.idle()
-
-if __name__ == '__main__':
-    main()
+# Run app
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=PORT)
