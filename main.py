@@ -4,16 +4,20 @@ from telegram.ext import Updater, CommandHandler, CallbackContext, MessageHandle
 import time
 import threading
 import random
-from flask import Flask
-from threading import Thread
 import requests
+
+# ========== CONFIG ==========
+
+BOT_TOKEN = '7697812728:AAHp1YLSJD5FiqIMSTxKImYSyMkIUply9Xk'  # <-- вставь свой токен здесь
+
+# ========== ЛОГГИРОВАНИЕ ==========
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-BOT_TOKEN = '7697812728:AAHp1YLSJD5FiqIMSTxKImYSyMkIUply9Xk'
+# ========== ЯЗЫКИ ==========
 
 LANGUAGES = {
     'ru': {
@@ -76,8 +80,12 @@ LANGUAGES = {
     }
 }
 
+# ========== ПЕРЕМЕННЫЕ ==========
+
 user_settings = {}
 volume_history = {}
+
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 
 def get_lang(chat_id):
     return user_settings.get(chat_id, {}).get('lang', 'ru')
@@ -85,57 +93,16 @@ def get_lang(chat_id):
 def t(chat_id, key, **kwargs):
     lang = get_lang(chat_id)
     text = LANGUAGES.get(lang, LANGUAGES['ru']).get(key, key)
+    if key not in LANGUAGES.get(lang, {}):
+        logging.warning(f"Missing translation: {key} in {lang}")
     return text.format(**kwargs)
 
-def main_menu_keyboard(chat_id):
-    if not user_settings.get(chat_id, {}).get('captcha_passed', False):
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton(t(chat_id, 'btn_captcha'), callback_data='start_captcha')]
-        ])
+def check_suspicious_volume(current_volume, avg_volume, threshold=3.0):
+    if avg_volume == 0:
+        return False
+    return current_volume >= avg_volume * threshold
 
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(chat_id, 'btn_language'), callback_data='show_language')],
-        [InlineKeyboardButton(t(chat_id, 'btn_exchange'), callback_data='show_exchange')],
-        [InlineKeyboardButton(t(chat_id, 'btn_interval'), callback_data='show_interval')],
-        [InlineKeyboardButton(t(chat_id, 'btn_filter'), callback_data='show_filter')],
-        [InlineKeyboardButton(t(chat_id, 'btn_captcha_again'), callback_data='start_captcha')]
-    ])
-
-def language_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🇷🇺 Русский", callback_data='lang_ru')],
-        [InlineKeyboardButton("🇬🇧 English", callback_data='lang_en')],
-    ])
-
-def exchange_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 MEXC", callback_data='exchange_mex')],
-        [InlineKeyboardButton("💹 Binance", callback_data='exchange_bin')],
-        [InlineKeyboardButton("📈 KuCoin", callback_data='exchange_ku')],
-        [InlineKeyboardButton("📉 ByBit", callback_data='exchange_by')],
-        [InlineKeyboardButton("💰 BingX", callback_data='exchange_bing')],
-    ])
-
-def interval_keyboard(chat_id):
-    intervals = [
-        (30, "30 сек", "30 sec"),
-        (60, "60 сек", "60 sec"),
-        (120, "120 сек", "120 sec"),
-        (300, "300 сек", "300 sec")
-    ]
-    buttons = []
-    lang = get_lang(chat_id)
-    for sec, ru_label, en_label in intervals:
-        label = ru_label if lang == 'ru' else en_label
-        buttons.append([InlineKeyboardButton(label, callback_data=f'interval_{sec}')])
-    return InlineKeyboardMarkup(buttons)
-
-def filter_keyboard(chat_id):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(chat_id, 'pump_only'), callback_data='filter_pump')],
-        [InlineKeyboardButton(t(chat_id, 'dump_only'), callback_data='filter_dump')],
-        [InlineKeyboardButton(t(chat_id, 'all'), callback_data='filter_all')],
-    ])
+# ========== ОБРАБОТЧИКИ ==========
 
 def start(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -152,18 +119,10 @@ def start(update: Update, context: CallbackContext):
 
 def text_handler(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    text = update.message.text.strip()
-
     if not user_settings.get(chat_id, {}).get('captcha_passed', False):
         update.message.reply_text(t(chat_id, 'captcha_required'), reply_markup=main_menu_keyboard(chat_id))
         return
-
-    if text == "/start":
-        start(update, context)
-    elif text == "/menu":
-        update.message.reply_text(t(chat_id, 'menu'), reply_markup=main_menu_keyboard(chat_id))
-    else:
-        update.message.reply_text(t(chat_id, 'menu'), reply_markup=main_menu_keyboard(chat_id))
+    update.message.reply_text(t(chat_id, 'menu'), reply_markup=main_menu_keyboard(chat_id))
 
 def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -204,13 +163,57 @@ def button_handler(update: Update, context: CallbackContext):
 
     elif data.startswith('filter_'):
         filt = data.split('_')[1]
-        if filt in ('pump', 'dump', 'all'):
-            user_settings.setdefault(chat_id, {})['filter'] = filt
-            filter_name = t(chat_id, filt + '_only') if filt != 'all' else t(chat_id, 'all')
-            query.edit_message_text(t(chat_id, 'filter_set', filter=filter_name), reply_markup=main_menu_keyboard(chat_id))
+        user_settings.setdefault(chat_id, {})['filter'] = filt
+        label = t(chat_id, f'{filt}_only') if filt in ['pump', 'dump'] else t(chat_id, 'all')
+        query.edit_message_text(t(chat_id, 'filter_set', filter=label), reply_markup=main_menu_keyboard(chat_id))
 
     elif data.startswith('captcha_'):
         handle_captcha(update, context)
+
+# ========== КЛАВИАТУРЫ ==========
+
+def main_menu_keyboard(chat_id):
+    if not user_settings.get(chat_id, {}).get('captcha_passed', False):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(t(chat_id, 'btn_captcha'), callback_data='start_captcha')]
+        ])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(chat_id, 'btn_language'), callback_data='show_language')],
+        [InlineKeyboardButton(t(chat_id, 'btn_exchange'), callback_data='show_exchange')],
+        [InlineKeyboardButton(t(chat_id, 'btn_interval'), callback_data='show_interval')],
+        [InlineKeyboardButton(t(chat_id, 'btn_filter'), callback_data='show_filter')],
+        [InlineKeyboardButton(t(chat_id, 'btn_captcha_again'), callback_data='start_captcha')],
+    ])
+
+def language_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🇷🇺 Русский", callback_data='lang_ru')],
+        [InlineKeyboardButton("🇬🇧 English", callback_data='lang_en')],
+    ])
+
+def exchange_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 MEXC", callback_data='exchange_mex')],
+        [InlineKeyboardButton("💹 Binance", callback_data='exchange_bin')],
+        [InlineKeyboardButton("📈 KuCoin", callback_data='exchange_ku')],
+        [InlineKeyboardButton("📉 ByBit", callback_data='exchange_by')],
+        [InlineKeyboardButton("💰 BingX", callback_data='exchange_bing')],
+    ])
+
+def interval_keyboard(chat_id):
+    intervals = [(30, "30 сек", "30 sec"), (60, "60 сек", "60 sec"), (120, "120 сек", "120 sec"), (300, "300 сек", "300 sec")]
+    lang = get_lang(chat_id)
+    buttons = [[InlineKeyboardButton(ru if lang == 'ru' else en, callback_data=f'interval_{sec}')] for sec, ru, en in intervals]
+    return InlineKeyboardMarkup(buttons)
+
+def filter_keyboard(chat_id):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(chat_id, 'pump_only'), callback_data='filter_pump')],
+        [InlineKeyboardButton(t(chat_id, 'dump_only'), callback_data='filter_dump')],
+        [InlineKeyboardButton(t(chat_id, 'all'), callback_data='filter_all')],
+    ])
+
+# ========== CAPTCHA ==========
 
 def emoji_captcha(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -220,90 +223,70 @@ def emoji_captcha(update: Update, context: CallbackContext):
     if target not in options:
         options[0] = target
     random.shuffle(options)
-    buttons = []
-    for idx, emoji in enumerate(options):
-        buttons.append([InlineKeyboardButton(emoji, callback_data=f'captcha_{idx}')])
+
+    buttons = [[InlineKeyboardButton(emoji, callback_data=f'captcha_{i}')] for i, emoji in enumerate(options)]
     context.user_data['captcha_target_emoji'] = target
     context.user_data['captcha_options'] = options
 
+    msg = t(chat_id, 'captcha', target=target)
     if update.callback_query:
-        update.callback_query.edit_message_text(
-            t(chat_id, 'captcha', target=target),
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
+        update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(buttons))
     else:
-        update.message.reply_text(
-            t(chat_id, 'captcha', target=target),
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
+        update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(buttons))
 
 def handle_captcha(update: Update, context: CallbackContext):
     query = update.callback_query
     chat_id = query.message.chat.id
     selected_idx = int(query.data.replace('captcha_', ''))
     options = context.user_data.get('captcha_options', [])
-    target_emoji = context.user_data.get('captcha_target_emoji')
+    target = context.user_data.get('captcha_target_emoji')
 
-    if options and 0 <= selected_idx < len(options):
-        selected_emoji = options[selected_idx]
-        if selected_emoji == target_emoji:
-            if chat_id not in user_settings:
-                user_settings[chat_id] = {}
-            user_settings[chat_id]['captcha_passed'] = True
-            query.edit_message_text(t(chat_id, 'captcha_pass'), reply_markup=main_menu_keyboard(chat_id))
-        else:
-            query.edit_message_text(t(chat_id, 'captcha_fail'), reply_markup=None)
-            # Отправляем новую капчу без задержек, чтобы не блокировать
-            emoji_captcha(update, context)
+    if 0 <= selected_idx < len(options) and options[selected_idx] == target:
+        user_settings.setdefault(chat_id, {})['captcha_passed'] = True
+        query.edit_message_text(t(chat_id, 'captcha_pass'), reply_markup=main_menu_keyboard(chat_id))
     else:
-        query.edit_message_text(t(chat_id, 'captcha_fail'), reply_markup=None)
+        query.edit_message_text(t(chat_id, 'captcha_fail'))
         emoji_captcha(update, context)
 
-def check_suspicious_volume(current_volume, avg_volume, threshold=3.0):
-    if avg_volume == 0:
-        return False
-    return current_volume >= avg_volume * threshold
+# ========== МОНИТОРИНГ РЫНКА ==========
 
-def monitor_loop():
+def monitor_loop(bot):
     while True:
+        time.sleep(3)  # чтобы не спамить API
+
         for chat_id, settings in user_settings.items():
-            if not settings.get('captcha_passed', False):
-                continue
-
-            exchange = settings.get('exchange', 'mex')
-            threshold = settings.get('threshold', 5.0)
-            interval = settings.get('interval', 60)
-            last_notify = settings.get('last_notify', 0)
-            filter_type = settings.get('filter', 'all')
-            now = time.time()
-
-            if now - last_notify < interval:
+            if not settings.get('captcha_passed'):
                 continue
 
             try:
+                exchange = settings.get('exchange', 'mex')
+                threshold = settings.get('threshold', 5.0)
+                interval = settings.get('interval', 60)
+                last_notify = settings.get('last_notify', 0)
+                filter_type = settings.get('filter', 'all')
+                now = time.time()
+
+                if now - last_notify < interval:
+                    continue
+
+                url = ''
                 data = []
+
                 if exchange == 'mex':
                     url = 'https://contract.mexc.com/api/v1/contract/ticker'
-                    resp = requests.get(url, timeout=10).json()
-                    data = resp.get('data', [])
+                    data = requests.get(url, timeout=10).json().get('data', [])
                 elif exchange == 'bin':
                     url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
-                    data = requests.get(url, timeout=10).json()
-                    data = [coin for coin in data if coin['symbol'].endswith('USDT') or coin['symbol'].endswith('PERP')]
+                    data = [d for d in requests.get(url, timeout=10).json() if d['symbol'].endswith('USDT')]
                 elif exchange == 'ku':
                     url = 'https://api-futures.kucoin.com/api/v1/contract/ticker'
-                    resp = requests.get(url, timeout=10).json()
-                    data = resp.get('data', {}).get('ticker', [])
+                    data = requests.get(url, timeout=10).json().get('data', {}).get('ticker', [])
                 elif exchange == 'by':
                     url = 'https://api.bybit.com/v2/public/tickers'
-                    resp = requests.get(url, timeout=10).json()
-                    data = resp.get('result', [])
+                    data = requests.get(url, timeout=10).json().get('result', [])
                 elif exchange == 'bing':
                     url = 'https://api.bingx.com/api/v1/contract/ticker'
-                    resp = requests.get(url, timeout=10).json()
-                    data = resp.get('data', [])
-                else:
-                    data = []
+                    data = requests.get(url, timeout=10).json().get('data', [])
 
                 for coin in data:
                     symbol = coin.get('symbol') or coin.get('contractCode') or coin.get('symbolName') or coin.get('name')
@@ -311,10 +294,10 @@ def monitor_loop():
                         continue
 
                     try:
-                        price = float(coin.get('lastPrice', coin.get('lastDealPrice', 0) or 0))
-                        open_price = float(coin.get('openPrice', coin.get('prevPrice24h', 0) or 0))
-                        volume = float(coin.get('volume', 0))
-                    except (ValueError, TypeError):
+                        price = float(coin.get('lastPrice') or coin.get('lastDealPrice') or 0)
+                        open_price = float(coin.get('openPrice') or coin.get('prevPrice24h') or 0)
+                        volume = float(coin.get('volume') or 0)
+                    except:
                         continue
 
                     if open_price == 0:
@@ -322,13 +305,34 @@ def monitor_loop():
 
                     change_percent = ((price - open_price) / open_price) * 100
 
-                    # Проверяем подозрительный объем (резкий рост)
+                    # Подозрительная активность
                     avg_vol = volume_history.get(symbol, 0)
                     if check_suspicious_volume(volume, avg_vol):
-                        try:
-                            alert_text = t(chat_id, 'suspicious_alert')
-                            updater.bot.send_message(chat_id=chat_id, text=alert_text)
-                        except Exception as e:
-                            logging.error(f"Failed to send suspicious alert to {chat_id}: {e}")
+                        bot.send_message(chat_id=chat_id, text=t(chat_id, 'suspicious_alert'))
 
-                   
+                    if abs(change_percent) >= threshold:
+                        if (change_percent > 0 and filter_type == 'dump') or (change_percent < 0 and filter_type == 'pump'):
+                            continue
+                        key = 'alert_pump' if change_percent > 0 else 'alert_dump'
+                        emoji = "🚀" if change_percent > 0 else "📉"
+                        bot.send_message(chat_id=chat_id, text=t(chat_id, key, percent=change_percent, seconds=interval, emoji=emoji))
+                        user_settings[chat_id]['last_notify'] = now
+
+                    volume_history[symbol] = (volume_history.get(symbol, 0) * 0.9) + (volume * 0.1)
+
+            except Exception as e:
+                logging.error(f"Monitor error: {e}")
+
+# ========== ЗАПУСК ==========
+
+updater = Updater(BOT_TOKEN, use_context=True)
+dp = updater.dispatcher
+
+dp.add_handler(CommandHandler("start", start))
+dp.add_handler(MessageHandler(Filters.text & ~Filters.command, text_handler))
+dp.add_handler(CallbackQueryHandler(button_handler))
+
+threading.Thread(target=monitor_loop, args=(updater.bot,), daemon=True).start()
+
+updater.start_polling()
+updater.idle()
