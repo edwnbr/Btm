@@ -176,3 +176,15 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+app = Flask(__name__)
+
+updater.start_webhook(
+    listen="0.0.0.0",
+    port=PORT,
+    url_path=BOT_TOKEN,
+    webhook_url=WEBHOOK_URL,
+)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=PORT)
