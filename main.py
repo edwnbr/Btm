@@ -1,21 +1,17 @@
 import logging
-import random
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Updater, CommandHandler, CallbackContext, MessageHandler, Filters, CallbackQueryHandler
 import time
 import threading
+import random
 from flask import Flask
+from threading import Thread
 import requests
 
-from telegram import (
-    InlineKeyboardMarkup, InlineKeyboardButton, Update, ReplyKeyboardMarkup, KeyboardButton
-)
-from telegram.ext import (
-    Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
-)
-
-# === Токен бота ===
+# Токен бота
 BOT_TOKEN = '7697812728:AAHp1YLSJD5FiqIMSTxKImYSyMkIUply9Xk'
 
-# === Локализация ===
+# Настройки и переводы
 LANGUAGES = {
     'ru': {
         'start': "👋 Привет! Я бот для отслеживания пампов и дампов на фьючерсах.\n\nВыбери биржу, язык, порог и способ оповещений.",
@@ -55,7 +51,6 @@ LANGUAGES = {
     }
 }
 
-# Хранилище настроек пользователей
 user_settings = {}
 
 def get_lang(chat_id):
@@ -63,20 +58,20 @@ def get_lang(chat_id):
 
 def t(chat_id, key, **kwargs):
     lang = get_lang(chat_id)
-    template = LANGUAGES.get(lang, LANGUAGES['ru']).get(key, key)
-    return template.format(**kwargs)
+    text = LANGUAGES.get(lang, LANGUAGES['ru']).get(key, key)
+    return text.format(**kwargs)
 
-# Клавиатуры
-def main_menu_keyboard():
+# Меню и клавиатуры
+def main_menu_keyboard(chat_id):
     return ReplyKeyboardMarkup([
-        ["📈 Set Threshold", "💱 Choose Exchange"],
-        ["🌐 Language", "🔒 Captcha Test"]
+        [KeyboardButton("📈 Set Threshold"), KeyboardButton("💱 Choose Exchange")],
+        [KeyboardButton("🌐 Language"), KeyboardButton("🔒 Captcha Test")],
     ], resize_keyboard=True)
 
 def language_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🇷🇺 Русский", callback_data='lang_ru')],
-        [InlineKeyboardButton("🇬🇧 English", callback_data='lang_en')]
+        [InlineKeyboardButton("🇬🇧 English", callback_data='lang_en')],
     ])
 
 def exchange_keyboard():
@@ -85,7 +80,7 @@ def exchange_keyboard():
         [InlineKeyboardButton("💹 Binance", callback_data='exchange_bin')],
         [InlineKeyboardButton("📈 KuCoin", callback_data='exchange_ku')],
         [InlineKeyboardButton("📉 ByBit", callback_data='exchange_by')],
-        [InlineKeyboardButton("💰 BingX", callback_data='exchange_bing')]
+        [InlineKeyboardButton("💰 BingX", callback_data='exchange_bing')],
     ])
 
 # Команды
@@ -98,7 +93,7 @@ def start(update: Update, context: CallbackContext):
         'interval': 60,
         'last_notify': 0
     }
-    update.message.reply_text(t(chat_id, 'start'), reply_markup=main_menu_keyboard())
+    update.message.reply_text(t(chat_id, 'start'), reply_markup=main_menu_keyboard(chat_id))
 
 def text_handler(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -124,7 +119,7 @@ def text_handler(update: Update, context: CallbackContext):
             update.message.reply_text("❌ Invalid input. Example: 5 60")
         context.user_data['awaiting'] = None
     else:
-        update.message.reply_text(t(chat_id, 'menu'), reply_markup=main_menu_keyboard())
+        update.message.reply_text(t(chat_id, 'menu'), reply_markup=main_menu_keyboard(chat_id))
 
 def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -135,7 +130,7 @@ def button_handler(update: Update, context: CallbackContext):
         lang_code = data.split('_')[1]
         user_settings.setdefault(chat_id, {})['lang'] = lang_code
         query.edit_message_text(t(chat_id, 'lang_set'))
-        context.bot.send_message(chat_id, t(chat_id, 'menu'), reply_markup=main_menu_keyboard())
+        context.bot.send_message(chat_id, t(chat_id, 'menu'), reply_markup=main_menu_keyboard(chat_id))
 
     elif data.startswith('exchange_'):
         exch_code = data.split('_')[1]
@@ -168,22 +163,20 @@ def handle_captcha(update: Update, context: CallbackContext):
     else:
         query.edit_message_text(t(chat_id, 'captcha_fail'))
 
-# Функция для мониторинга пампов/дампов
-def monitor_loop(updater: Updater):
-    bot = updater.bot
+# Мониторинг пампов/дампов и подозрительной активности (пример с MEXC)
+def monitor_loop():
     while True:
-        now = time.time()
         for chat_id, settings in user_settings.items():
             exchange = settings.get('exchange', 'mex')
             threshold = settings.get('threshold', 5.0)
             interval = settings.get('interval', 60)
             last_notify = settings.get('last_notify', 0)
-
+            now = time.time()
             if now - last_notify < interval:
                 continue  # cooldown
 
+            # Для примера, запрос к MEXC фьючерсному API
             try:
-                # Получаем данные с API выбранной биржи
                 if exchange == 'mex':
                     url = 'https://contract.mexc.com/api/v1/contract/ticker'
                     data = requests.get(url).json().get('data', [])
@@ -202,46 +195,40 @@ def monitor_loop(updater: Updater):
                 else:
                     data = []
 
-                # Проверяем монеты на пампы/дампы
                 for coin in data:
-                    symbol = (
-                        coin.get('symbol')
-                        or coin.get('contractCode')
-                        or coin.get('symbolName')
-                        or coin.get('name')
-                    )
+                    symbol = coin.get('symbol') or coin.get('contractCode') or coin.get('symbolName') or coin.get('name')
                     if not symbol:
                         continue
-                    price = float(
-                        coin.get('lastPrice')
-                        or coin.get('lastDealPrice')
-                        or 0
-                    )
-                    open_price = float(
-                        coin.get('openPrice')
-                        or coin.get('prevPrice24h')
-                        or 0
-                    )
+                    price = float(coin.get('lastPrice', coin.get('lastDealPrice', 0) or 0))
+                    open_price = float(coin.get('openPrice', coin.get('prevPrice24h', 0) or 0))
                     if open_price == 0:
                         continue
                     change_percent = ((price - open_price) / open_price) * 100
                     if abs(change_percent) >= threshold:
                         emoji = "🚀" if change_percent > 0 else "📉"
-                        key = 'alert_pump' if change_percent > 0 else 'alert_dump'
-                        msg = t(chat_id, key, percent=change_percent, seconds=interval, emoji=emoji)
-                        bot.send_message(chat_id, msg)
+                        text_key = 'alert_pump' if change_percent > 0 else 'alert_dump'
+                        msg = t(chat_id, text_key, percent=change_percent, seconds=interval, emoji=emoji)
+                        context.bot.send_message(chat_id, msg)
                         user_settings[chat_id]['last_notify'] = now
 
-                # Подозрительная активность (пример)
+                # Пример подозрительной активности (случайная имитация)
                 if random.random() < 0.01:
-                    bot.send_message(chat_id, t(chat_id, 'suspicious_alert'))
+                    context.bot.send_message(chat_id, t(chat_id, 'suspicious_alert'))
 
             except Exception as e:
-                logging.error(f"Error monitoring {exchange} for chat {chat_id}: {e}")
+                print(f"Error monitoring {exchange}: {e}")
 
         time.sleep(5)
 
-# Flask keep-alive (для Render, Replit и др.)
+# Инициализация бота
+updater = Updater(BOT_TOKEN, use_context=True)
+dispatcher = updater.dispatcher
+
+dispatcher.add_handler(CommandHandler('start', start))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, text_handler))
+dispatcher.add_handler(CallbackQueryHandler(button_handler))
+
+# Flask для keep-alive (Replit)
 app = Flask(__name__)
 
 @app.route('/')
@@ -252,23 +239,13 @@ def run_flask():
     app.run(host='0.0.0.0', port=8080)
 
 def keep_alive():
-    t = threading.Thread(target=run_flask)
+    t = Thread(target=run_flask)
     t.start()
 
-# === Запуск бота ===
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
-
-    dispatcher.add_handler(CommandHandler('start', start))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, text_handler))
-    dispatcher.add_handler(CallbackQueryHandler(button_handler))
-
     keep_alive()
-
-    monitor_thread = threading.Thread(target=monitor_loop, args=(updater,), daemon=True)
+    # Запускаем мониторинг в отдельном потоке
+    monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
     monitor_thread.start()
-
     updater.start_polling()
     updater.idle()
