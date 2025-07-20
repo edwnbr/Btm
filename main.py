@@ -1,3 +1,4 @@
+import os
 import time
 import logging
 import random
@@ -10,8 +11,10 @@ from telegram.ext import (
 )
 
 # ===================== CONFIG =====================
-BOT_TOKEN = "7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE"  # ⚠️ Замени на реальный токен
-WEBHOOK_HOST = "https://btm-c4tt.onrender.com"
+BOT_TOKEN = "7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE"  # <-- замени на свой настоящий токен
+RENDER_EXTERNAL_HOSTNAME = "btm-c4tt.onrender.com"  # <-- твой Render-домен
+
+WEBHOOK_HOST = f"https://{RENDER_EXTERNAL_HOSTNAME}"
 WEBHOOK_PATH = f"/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 PORT = 8443
@@ -112,17 +115,23 @@ def monitor_loop(bot):
             if not settings.get('captcha_passed'):
                 continue
             try:
-                url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
-                data = requests.get(url, timeout=10).json()
-                data = [d for d in data if d['symbol'].endswith('USDT')]
+                response = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10)
+                if not response.ok:
+                    continue
+                data = response.json()
+                if not isinstance(data, list):
+                    continue
+                data = [d for d in data if isinstance(d, dict) and d.get("symbol", "").endswith("USDT")]
 
                 for coin in data[:10]:
-                    symbol = coin['symbol']
+                    symbol = coin.get("symbol")
+                    if not symbol:
+                        continue
                     try:
-                        price = float(coin['lastPrice'])
-                        open_price = float(price / (1 + float(coin['priceChangePercent']) / 100))
-                        volume = float(coin['volume'])
-                    except:
+                        price = float(coin["lastPrice"])
+                        open_price = float(price / (1 + float(coin["priceChangePercent"]) / 100))
+                        volume = float(coin["volume"])
+                    except (KeyError, ValueError):
                         continue
 
                     if open_price == 0:
