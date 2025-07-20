@@ -4,3 +4,4 @@ requests
 matplotlib
 urllib3==1.26.16
 aiohttp
+apscheduler
