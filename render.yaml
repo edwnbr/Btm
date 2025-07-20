@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: btm-bot
+    env: python
+    plan: free
+    region: oregon
+    runtime: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py"
+    envVars:
+      - key: BOT_TOKEN
+        value: 7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE
+    autoDeploy: true
