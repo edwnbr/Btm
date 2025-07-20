@@ -8,7 +8,7 @@ import requests
 
 # ========== CONFIG ==========
 
-BOT_TOKEN = '7697812728:AAHp1YLSJD5FiqIMSTxKImYSyMkIUply9Xk'  # <-- вставь свой токен здесь
+BOT_TOKEN = '7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE'  # <-- вставь свой токен здесь
 
 # ========== ЛОГГИРОВАНИЕ ==========
 
