@@ -1,4 +1,3 @@
-import os
 import time
 import logging
 import random
@@ -11,12 +10,11 @@ from telegram.ext import (
 )
 
 # ===================== CONFIG =====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN") or "7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE"  # <-- вставь сюда свой токен
-
-WEBHOOK_HOST = f'https://{os.environ.get("https://btm-c4tt.onrender.com")}'
+BOT_TOKEN = "7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE"  # ⚠️ Замени на реальный токен
+WEBHOOK_HOST = "https://btm-c4tt.onrender.com"
 WEBHOOK_PATH = f"/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
-PORT = int(os.environ.get("PORT", 8443))
+PORT = 8443
 
 logging.basicConfig(level=logging.INFO)
 
