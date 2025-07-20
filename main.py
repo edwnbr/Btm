@@ -181,6 +181,9 @@ def monitor_loop(bot):
             try:
                 response = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10)
                 data = response.json()
+        if not isinstance(data, list):
+            logging.warning(\"Unexpected response format\")
+            continue
                 data = [d for d in data if d.get("symbol", "").endswith("USDT")]
                 for coin in data[:10]:
                     symbol = coin["symbol"]
