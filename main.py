@@ -8,6 +8,11 @@ from flask import Flask
 from threading import Thread
 import requests
 
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+
 BOT_TOKEN = '7697812728:AAHp1YLSJD5FiqIMSTxKImYSyMkIUply9Xk'
 
 LANGUAGES = {
@@ -72,6 +77,7 @@ LANGUAGES = {
 }
 
 user_settings = {}
+volume_history = {}
 
 def get_lang(chat_id):
     return user_settings.get(chat_id, {}).get('lang', 'ru')
@@ -111,7 +117,6 @@ def exchange_keyboard():
     ])
 
 def interval_keyboard(chat_id):
-    # Варианты интервалов с надписями на языке пользователя
     intervals = [
         (30, "30 сек", "30 sec"),
         (60, "60 сек", "60 sec"),
@@ -126,7 +131,6 @@ def interval_keyboard(chat_id):
     return InlineKeyboardMarkup(buttons)
 
 def filter_keyboard(chat_id):
-    lang = get_lang(chat_id)
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t(chat_id, 'pump_only'), callback_data='filter_pump')],
         [InlineKeyboardButton(t(chat_id, 'dump_only'), callback_data='filter_dump')],
@@ -186,7 +190,6 @@ def button_handler(update: Update, context: CallbackContext):
     elif data.startswith('lang_'):
         lang_code = data.split('_')[1]
         user_settings.setdefault(chat_id, {})['lang'] = lang_code
-        # После смены языка обновляем меню на новом языке
         query.edit_message_text(t(chat_id, 'lang_set'), reply_markup=main_menu_keyboard(chat_id))
 
     elif data.startswith('exchange_'):
@@ -222,7 +225,7 @@ def emoji_captcha(update: Update, context: CallbackContext):
         buttons.append([InlineKeyboardButton(emoji, callback_data=f'captcha_{idx}')])
     context.user_data['captcha_target_emoji'] = target
     context.user_data['captcha_options'] = options
-    # Отправляем сообщение с кнопками эмоджи капчи
+
     if update.callback_query:
         update.callback_query.edit_message_text(
             t(chat_id, 'captcha', target=target),
@@ -250,21 +253,16 @@ def handle_captcha(update: Update, context: CallbackContext):
             query.edit_message_text(t(chat_id, 'captcha_pass'), reply_markup=main_menu_keyboard(chat_id))
         else:
             query.edit_message_text(t(chat_id, 'captcha_fail'), reply_markup=None)
-            # Немного задержки, потом новая капча
-            time.sleep(1)
+            # Отправляем новую капчу без задержек, чтобы не блокировать
             emoji_captcha(update, context)
     else:
         query.edit_message_text(t(chat_id, 'captcha_fail'), reply_markup=None)
-        time.sleep(1)
         emoji_captcha(update, context)
 
-# Функция проверки подозрительных объёмов
 def check_suspicious_volume(current_volume, avg_volume, threshold=3.0):
     if avg_volume == 0:
         return False
     return current_volume >= avg_volume * threshold
-
-volume_history = {}
 
 def monitor_loop():
     while True:
@@ -291,7 +289,6 @@ def monitor_loop():
                 elif exchange == 'bin':
                     url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
                     data = requests.get(url, timeout=10).json()
-                    # Фильтруем фьючерсы
                     data = [coin for coin in data if coin['symbol'].endswith('USDT') or coin['symbol'].endswith('PERP')]
                 elif exchange == 'ku':
                     url = 'https://api-futures.kucoin.com/api/v1/contract/ticker'
@@ -312,3 +309,26 @@ def monitor_loop():
                     symbol = coin.get('symbol') or coin.get('contractCode') or coin.get('symbolName') or coin.get('name')
                     if not symbol:
                         continue
+
+                    try:
+                        price = float(coin.get('lastPrice', coin.get('lastDealPrice', 0) or 0))
+                        open_price = float(coin.get('openPrice', coin.get('prevPrice24h', 0) or 0))
+                        volume = float(coin.get('volume', 0))
+                    except (ValueError, TypeError):
+                        continue
+
+                    if open_price == 0:
+                        continue
+
+                    change_percent = ((price - open_price) / open_price) * 100
+
+                    # Проверяем подозрительный объем (резкий рост)
+                    avg_vol = volume_history.get(symbol, 0)
+                    if check_suspicious_volume(volume, avg_vol):
+                        try:
+                            alert_text = t(chat_id, 'suspicious_alert')
+                            updater.bot.send_message(chat_id=chat_id, text=alert_text)
+                        except Exception as e:
+                            logging.error(f"Failed to send suspicious alert to {chat_id}: {e}")
+
+                   
