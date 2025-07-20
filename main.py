@@ -1,10 +1,10 @@
 import os
 import time
 import logging
-import threading
 import random
+import threading
 import requests
-from flask import Flask
+from flask import Flask, request
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from telegram.ext import (
     Updater, CommandHandler, CallbackContext,
@@ -13,7 +13,10 @@ from telegram.ext import (
 
 # ===================== CONFIG =====================
 
-BOT_TOKEN = '7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE'  # Вставь свой токен здесь
+BOT_TOKEN = '7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE'  # ВСТАВЬ СЮДА СВОЙ ТОКЕН
+WEBHOOK_HOST = 'https://btm-c4tt.onrender.com'  # ВСТАВЬ СЮДА СВОЙ РЕНДЕР URL
+WEBHOOK_PATH = f"/{BOT_TOKEN}"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -30,7 +33,6 @@ LANGUAGES = {
         'captcha_pass': "✅ Verified!",
         'captcha_fail': "❌ Wrong emoji. Try again.",
         'captcha_required': "❗️ Please complete the captcha first.",
-        'btn_captcha': "🔒 Pass captcha",
         'btn_captcha_again': "🔒 Retry captcha",
         'alert_pump': "🚀 Price up {percent:.2f}% in {seconds}s {emoji}",
         'alert_dump': "📉 Price down {percent:.2f}% in {seconds}s {emoji}",
@@ -73,17 +75,10 @@ def handle_captcha(update: Update, context: CallbackContext):
 
     if 0 <= idx < len(options) and options[idx] == target:
         user_settings.setdefault(chat_id, {})['captcha_passed'] = True
-        query.edit_message_text(t(chat_id, 'captcha_pass'), reply_markup=main_menu_keyboard(chat_id))
+        query.edit_message_text(t(chat_id, 'captcha_pass'))
     else:
         query.edit_message_text(t(chat_id, 'captcha_fail'))
         emoji_captcha(update, context)
-
-# ===================== UI =====================
-
-def main_menu_keyboard(chat_id):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(chat_id, 'btn_captcha_again'), callback_data='start_captcha')]
-    ])
 
 # ===================== HANDLERS =====================
 
@@ -97,20 +92,20 @@ def start(update: Update, context: CallbackContext):
         'last_notify': 0,
         'captcha_passed': False,
     }
-    update.message.reply_text(t(chat_id, 'start'), reply_markup=main_menu_keyboard(chat_id))
+    update.message.reply_text(t(chat_id, 'start'))
+    emoji_captcha(update, context)
 
 def text_handler(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     if not user_settings.get(chat_id, {}).get('captcha_passed', False):
-        update.message.reply_text(t(chat_id, 'captcha_required'), reply_markup=main_menu_keyboard(chat_id))
+        update.message.reply_text(t(chat_id, 'captcha_required'))
+        emoji_captcha(update, context)
     else:
         update.message.reply_text("✅ You are verified.")
 
 def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
-    chat_id = query.message.chat.id
     data = query.data
-
     if data.startswith('captcha_'):
         handle_captcha(update, context)
     elif data == 'start_captcha':
@@ -130,7 +125,7 @@ def monitor_loop(bot):
                 data = requests.get(url, timeout=10).json()
                 data = [d for d in data if d['symbol'].endswith('USDT')]
 
-                for coin in data[:10]:  # ограничим 10 монетами для демо
+                for coin in data[:10]:
                     symbol = coin['symbol']
                     try:
                         price = float(coin['lastPrice'])
@@ -154,7 +149,6 @@ def monitor_loop(bot):
                         bot.send_message(chat_id, text)
                         user_settings[chat_id]['last_notify'] = now
 
-                    # Suspicious volume
                     avg_vol = volume_history.get(symbol, 0)
                     if avg_vol and volume > avg_vol * 3:
                         bot.send_message(chat_id, t(chat_id, 'suspicious_alert'))
@@ -172,16 +166,31 @@ dp.add_handler(CommandHandler("start", start))
 dp.add_handler(MessageHandler(Filters.text & ~Filters.command, text_handler))
 dp.add_handler(CallbackQueryHandler(button_handler))
 
-# Запуск мониторинга в фоне
-threading.Thread(target=monitor_loop, args=(updater.bot,), daemon=True).start()
-threading.Thread(target=updater.start_polling, daemon=True).start()
+# ===================== FLASK WEBHOOK =====================
 
-# ===================== FLASK для Render =====================
+@app.route(WEBHOOK_PATH, methods=['POST'])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), updater.bot)
+    dp.process_update(update)
+    return "ok"
 
 @app.route('/')
 def index():
     return "Bot is alive!"
 
+# ===================== MAIN =====================
+
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))  # Render требует переменную PORT
-    app.run(host='0.0.0.0', port=port)
+    # Установим вебхук
+    updater.start_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 8443)),
+        url_path=BOT_TOKEN
+    )
+    updater.bot.set_webhook(WEBHOOK_URL)
+
+    # Запуск фонового мониторинга
+    threading.Thread(target=monitor_loop, args=(updater.bot,), daemon=True).start()
+
+    # Flask сервер
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8443)))
