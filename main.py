@@ -168,15 +168,20 @@ def handle_text(update: Update, context: CallbackContext):
             user_data[user_id]["threshold"] = value
             update.message.reply_text(t(user_id, "confirm_threshold").format(threshold=value), reply_markup=get_reply_keyboard(user_id))
         except:
-            pass
-        return
-            if text == t(user_id, "interval"):
-        keyboard = [
-            [KeyboardButton("30s"), KeyboardButton("1m")],
-            [KeyboardButton("5m"), KeyboardButton("15m")]
-        ]
-        update.message.reply_text(t(user_id, "choose_interval"), reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-        return
+    pass
+
+# return тут был лишним или стоял не в том месте — удаляем
+
+if text == t(user_id, "interval"):
+    keyboard = [
+        [KeyboardButton("30s"), KeyboardButton("1m")],
+        [KeyboardButton("5m"), KeyboardButton("15m")]
+    ]
+    update.message.reply_text(
+        t(user_id, "choose_interval"),
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
+    return
 
     if text.endswith("s") or text.endswith("m"):
         try:
