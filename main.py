@@ -232,6 +232,11 @@ def monitor_prices():
         for user_id, settings in user_data.items():
             try:
                 symbol_changes = get_market_changes(
+                    exchange=settings["def monitor_prices():
+    while True:
+        for user_id, settings in user_data.items():
+            try:
+                symbol_changes = get_market_changes(
                     exchange=settings["exchange"],
                     market_type=settings["market"],
                     threshold=settings["threshold"],
@@ -240,15 +245,16 @@ def monitor_prices():
 
                 if symbol_changes:
                     for sym, change in symbol_changes.items():
-                        print(f"{sym}: {change}")
-            except:
-                pass
-                        print(f"{sym}: {change}")
-            except:
-                pass
+                        # Фильтр по типу уведомлений
                         if settings["alerts"] == "pump" and change < 0:
                             continue
                         if settings["alerts"] == "dump" and change > 0:
+                            continue
+
+                        # Уведомление
+                        print(f"{sym}: {change}")
+            except:
+                pass
                             continue
                         alert_msg = f"💹 {sym}:\n{change:.2f}% in last {settings['interval']}s"
                         context.bot.send_message(chat_id=user_id, text=alert_msg)
