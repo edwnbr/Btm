@@ -247,13 +247,13 @@ def monitor_prices():
                             continue
 
                         # Здесь будет отправка                 symbol_changes = get_market_changes(
-                    exchange=settings["exchange"],
-                    market_type=settings["market"],
-                    threshold=settings["threshold"],
-                    interval=settings["interval"]
-                )
-
-                if symbol_changes:
+                    symbol_changes = get_market_changes(
+    exchange=settings["exchange"],
+    market_type=settings["market"],
+    threshold=settings["threshold"],
+    interval=settings["interval"]
+)                
+                    if symbol_changes:
                     for sym, change in symbol_changes.items():
                         # Фильтрация по типу уведомлений
                         if settings["alerts"] == "pump" and change < 0:
