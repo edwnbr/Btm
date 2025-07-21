@@ -168,7 +168,7 @@ def handle_text(update: Update, context: CallbackContext):
             user_data[user_id]["threshold"] = value
             update.message.reply_text(t(user_id, "confirm_threshold").format(threshold=value), reply_markup=get_reply_keyboard(user_id))
         except:
-    pass
+            pass
 
 # return тут был лишним или стоял не в том месте — удаляем
 
