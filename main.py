@@ -246,10 +246,8 @@ def monitor_prices():
                         if settings["alerts"] == "dump" and change > 0:
                             continue
 
-                        # Здесь будет отправка уведомления
-                        print(f"{sym}: {change}")
-            except:
-                pass
+                        # Здесь будет отправка                 symbol_changes = get_market_changes(
+                    exchange=settings["exchange"],
                     market_type=settings["market"],
                     threshold=settings["threshold"],
                     interval=settings["interval"]
@@ -257,7 +255,13 @@ def monitor_prices():
 
                 if symbol_changes:
                     for sym, change in symbol_changes.items():
-                        # Фильтр по типу уведомлений
+                        # Фильтрация по типу уведомлений
+                        if settings["alerts"] == "pump" and change < 0:
+                            continue
+                        if settings["alerts"] == "dump" and change > 0:
+                            continue
+
+                        print(f"{sym}: {change}")
                         if settings["alerts"] == "pump" and change < 0:
                             continue
                         if settings["alerts"] == "dump" and change > 0:
