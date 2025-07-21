@@ -232,17 +232,22 @@ if text == t(user_id, "interval"):
             try:
                 symbol_changes = get_market_changes(
                     exchange=settings["exchange"],
-                    market_type=settings["market"]
-                )
-                # например, что-то вывести
-                print(symbol_changes)
-            except:
-                pass
+                    def monitor_prices():
+    while True:
+        for user_id, settings in user_data.items():
+            try:
+                symbol_changes = get_market_changes(
+                    exchange=settings["exchange"],
+                    market_type=settings["market"],
                     threshold=settings["threshold"],
                     interval=settings["interval"]
                 )
+
                 if symbol_changes:
                     for sym, change in symbol_changes.items():
+                        print(f"{sym}: {change}")
+            except:
+                pass
                         if settings["alerts"] == "pump" and change < 0:
                             continue
                         if settings["alerts"] == "dump" and change > 0:
