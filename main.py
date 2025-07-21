@@ -1,17 +1,19 @@
+
 import logging
 import os
-import time
-import threading
+import json
 import requests
+import threading
+import time
 from flask import Flask, request
 from telegram import (
-    Bot, Update, ReplyKeyboardMarkup, KeyboardButton
+    Bot, Update, ReplyKeyboardMarkup
 )
 from telegram.ext import (
     Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
 )
 
-# === CONFIG ===
+# ===================== CONFIG =====================
 BOT_TOKEN = "7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE"
 RENDER_EXTERNAL_HOSTNAME = "btm-c4tt.onrender.com"
 WEBHOOK_HOST = f"https://{RENDER_EXTERNAL_HOSTNAME}"
@@ -19,306 +21,189 @@ WEBHOOK_PATH = f"/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 PORT = int(os.environ.get('PORT', 8443))
 
+# ===================== LOGGING =====================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ===================== APP =====================
 app = Flask(__name__)
 bot = Bot(token=BOT_TOKEN)
 dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# === DATA ===
+# ===================== USER DATA =====================
 user_data = {}
 
-SUPPORTED_EXCHANGES = ['Binance', 'Bybit', 'MEXC', 'BingX']
-SUPPORTED_MARKETS = ['Spot', 'Futures']
-TIMEFRAMES = ['30s', '1m', '5m', '15m']
-PUMP_TYPES = ['📈 Pump', '📉 Dump', '📊 Both']
-
-# === TRANSLATIONS ===
+# ===================== TRANSLATIONS =====================
 texts = {
     "ru": {
-        "start": "👋 Привет! Пройди капчу, чтобы продолжить.",
-        "captcha_passed": "✅ Верификация прошла успешно!",
-        "language_selected": "🌐 Язык установлен: Русский",
-        "menu": "👇 Выберите действие:",
-        "settings": "⚙️ Ваши настройки:",
-        "confirm": "✅ Вы выбрали: ",
-        "current": "🛠 Текущие настройки:",
-        "exchange": "📊 Выберите биржу:",
-        "market": "💹 Выберите рынок:",
-        "timeframe": "⏱ Интервал времени:",
-        "threshold": "📈 Порог изменения (%):",
-        "alerts": "🔔 Тип уведомлений:",
-        "main_menu": [["🌐 Язык", "⚙️ Настройки"], ["📊 Биржа", "💹 Рынок"], ["📈 Порог", "⏱ Интервал"], ["🔔 Уведомления"]],
-        "captcha_button": "✅ Я не бот"
+        "start": "ð ÐÑÐ¸Ð²ÐµÑ! ÐÐ¾Ð´ÑÐ²ÐµÑÐ´Ð¸, ÑÑÐ¾ ÑÑ Ð½Ðµ Ð±Ð¾Ñ:",
+        "captcha_passed": "â ÐÐµÑÐ¸ÑÐ¸ÐºÐ°ÑÐ¸Ñ Ð¿ÑÐ¾ÑÐ»Ð° ÑÑÐ¿ÐµÑÐ½Ð¾!",
+        "language_selected": "ð Ð¯Ð·ÑÐº ÑÑÑÐ°Ð½Ð¾Ð²Ð»ÐµÐ½: Ð ÑÑÑÐºÐ¸Ð¹",
+        "menu": "ð ÐÑÐ±ÐµÑÐ¸ Ð´ÐµÐ¹ÑÑÐ²Ð¸Ðµ:",
+        "settings": "âï¸ Ð¢ÐµÐºÑÑÐ¸Ðµ Ð½Ð°ÑÑÑÐ¾Ð¹ÐºÐ¸:",
+        "confirm": "â ÐÑ Ð²ÑÐ±ÑÐ°Ð»Ð¸: ",
+        "main_menu": [["ð Ð¯Ð·ÑÐº", "âï¸ ÐÐ°ÑÑÑÐ¾Ð¹ÐºÐ¸"], ["ð ÐÐ¸ÑÐ¶Ð°", "ð¹ Ð ÑÐ½Ð¾Ðº"], ["â± ÐÐ½ÑÐµÑÐ²Ð°Ð»", "ð ÐÐ¾ÑÐ¾Ð³"], ["ð Ð¢Ð¸Ð¿ ÑÐ²ÐµÐ´Ð¾Ð¼Ð»ÐµÐ½Ð¸Ð¹"]],
+        "choose_language": "ÐÑÐ±ÐµÑÐ¸ÑÐµ ÑÐ·ÑÐº:",
+        "choose_exchange": "ÐÑÐ±ÐµÑÐ¸ÑÐµ Ð±Ð¸ÑÐ¶Ñ:",
+        "choose_market": "ÐÑÐ±ÐµÑÐ¸ÑÐµ ÑÑÐ½Ð¾Ðº:",
+        "choose_interval": "ÐÑÐ±ÐµÑÐ¸ÑÐµ Ð¸Ð½ÑÐµÑÐ²Ð°Ð»:",
+        "choose_threshold": "ÐÑÐ±ÐµÑÐ¸ÑÐµ Ð¿Ð¾ÑÐ¾Ð³ Ð¸Ð·Ð¼ÐµÐ½ÐµÐ½Ð¸Ñ (%):",
+        "choose_notify_type": "ÐÑÐ±ÐµÑÐ¸ÑÐµ ÑÐ¸Ð¿ ÑÐ²ÐµÐ´Ð¾Ð¼Ð»ÐµÐ½Ð¸Ð¹:",
+        "spot": "Ð¡Ð¿Ð¾Ñ",
+        "futures": "Ð¤ÑÑÑÐµÑÑÑ",
+        "pump": "ÐÐ°Ð¼Ð¿",
+        "dump": "ÐÐ°Ð¼Ð¿",
+        "both": "ÐÐ±Ð°",
+        "settings_applied": "â ÐÐ°ÑÑÑÐ¾Ð¹ÐºÐ¸ ÑÐ¾ÑÑÐ°Ð½ÐµÐ½Ñ.",
+        "not_verified": "ð« Ð¡Ð½Ð°ÑÐ°Ð»Ð° Ð¿ÑÐ¾Ð¹Ð´Ð¸ÑÐµ Ð²ÐµÑÐ¸ÑÐ¸ÐºÐ°ÑÐ¸Ñ CAPTCHA."
     },
     "en": {
-        "start": "👋 Hello! Please verify CAPTCHA to continue.",
-        "captcha_passed": "✅ Verification successful!",
-        "language_selected": "🌐 Language set to: English",
-        "menu": "👇 Choose an action:",
-        "settings": "⚙️ Your Settings:",
-        "confirm": "✅ You selected: ",
-        "current": "🛠 Current settings:",
-        "exchange": "📊 Select exchange:",
-        "market": "💹 Select market:",
-        "timeframe": "⏱ Timeframe:",
-        "threshold": "📈 Threshold (%):",
-        "alerts": "🔔 Alert type:",
-        "main_menu": [["🌐 Language", "⚙️ Settings"], ["📊 Exchange", "💹 Market"], ["📈 Threshold", "⏱ Timeframe"], ["🔔 Alerts"]],
-        "captcha_button": "✅ I'm not a bot"
+        "start": "ð Hello! Please verify you're not a bot:",
+        "captcha_passed": "â Verification successful!",
+        "language_selected": "ð Language set to: English",
+        "menu": "ð Choose an action:",
+        "settings": "âï¸ Current settings:",
+        "confirm": "â You selected: ",
+        "main_menu": [["ð Language", "âï¸ Settings"], ["ð Exchange", "ð¹ Market"], ["â± Interval", "ð Threshold"], ["ð Notify Type"]],
+        "choose_language": "Choose language:",
+        "choose_exchange": "Choose exchange:",
+        "choose_market": "Choose market:",
+        "choose_interval": "Choose interval:",
+        "choose_threshold": "Choose % threshold:",
+        "choose_notify_type": "Choose notification type:",
+        "spot": "Spot",
+        "futures": "Futures",
+        "pump": "Pump",
+        "dump": "Dump",
+        "both": "Both",
+        "settings_applied": "â Settings saved.",
+        "not_verified": "ð« Please complete CAPTCHA first."
     }
 }
-# === UTILS ===
-def get_lang(user_id):
-    return user_data.get(user_id, {}).get("lang", "en")
 
+exchanges = ["Binance", "Bybit", "MEXC", "BingX"]
+intervals = ["30s", "1m", "3m", "5m"]
+thresholds = ["1", "2", "3", "5", "10"]
+notify_types = ["pump", "dump", "both"]
 
-def t(user_id, key):
-    lang = get_lang(user_id)
-    return texts.get(lang, texts["en"]).get(key, key)
-
-
-def get_reply_keyboard(user_id):
-    lang = get_lang(user_id)
-    return ReplyKeyboardMarkup(texts[lang]["main_menu"], resize_keyboard=True)
-
-
-def init_user(user_id):
-    if user_id not in user_data:
-        user_data[user_id] = {
-            "verified": False,
-            "lang": "en",
-            "exchange": "Binance",
-            "market": "Spot",
-            "timeframe": "1m",
-            "threshold": 3,
-            "alerts": "📊 Both"
-        }
-
-# === CAPTCHA ===
-def send_captcha(update: Update, context: CallbackContext):
-    user_id = update.message.chat_id
-    init_user(user_id)
-    keyboard = [[KeyboardButton(t(user_id, "captcha_button"))]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    update.message.reply_text(t(user_id, "start"), reply_markup=reply_markup)
-
-def verify_captcha(update: Update, context: CallbackContext):
-    user_id = update.message.chat_id
-    text = update.message.text
-    if text == t(user_id, "captcha_button"):
-        user_data[user_id]["verified"] = True
-        update.message.reply_text(t(user_id, "captcha_passed"), reply_markup=get_reply_keyboard(user_id))
-    else:
-        send_captcha(update, context)
-        # === ОБРАБОТЧИКИ КНОПОК ===
-def handle_text(update: Update, context: CallbackContext):
-    user_id = update.message.chat_id
-    text = update.message.text
-    init_user(user_id)
-
-    if not user_data[user_id]["verified"]:
-        return send_captcha(update, context)
-
-    if text == t(user_id, "language"):
-        keyboard = [[KeyboardButton("🇬🇧 English")], [KeyboardButton("🇷🇺 Русский")]]
-        update.message.reply_text(t(user_id, "choose_lang"), reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-        return
-
-    if text in ["🇬🇧 English", "🇷🇺 Русский"]:
-        user_data[user_id]["lang"] = "en" if "English" in text else "ru"
-        update.message.reply_text(t(user_id, "language_selected"), reply_markup=get_reply_keyboard(user_id))
-        return
-
-    if text == t(user_id, "exchange"):
-        keyboard = [
-            [KeyboardButton("Binance"), KeyboardButton("Bybit")],
-            [KeyboardButton("MEXC"), KeyboardButton("BingX")]
-        ]
-        update.message.reply_text(t(user_id, "choose_exchange"), reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-        return
-
-    if text in ["Binance", "Bybit", "MEXC", "BingX"]:
-        user_data[user_id]["exchange"] = text
-        update.message.reply_text(t(user_id, "confirm_exchange").format(exchange=text), reply_markup=get_reply_keyboard(user_id))
-        return
-
-    if text == t(user_id, "market"):
-        keyboard = [[KeyboardButton("Spot"), KeyboardButton("Futures")]]
-        update.message.reply_text(t(user_id, "choose_market"), reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-        return
-
-    if text in ["Spot", "Futures"]:
-        user_data[user_id]["market"] = text
-        update.message.reply_text(t(user_id, "confirm_market").format(market=text), reply_markup=get_reply_keyboard(user_id))
-        return
-
-    if text == t(user_id, "threshold"):
-        keyboard = [
-            [KeyboardButton("1%"), KeyboardButton("3%")],
-            [KeyboardButton("5%"), KeyboardButton("10%")]
-        ]
-        update.message.reply_text(t(user_id, "choose_threshold"), reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-        return
-
-    if text.endswith("%"):
-        try:
-            value = int(text.replace("%", ""))
-            user_data[user_id]["threshold"] = value
-            update.message.reply_text(t(user_id, "confirm_threshold").format(threshold=value), reply_markup=get_reply_keyboard(user_id))
-        except:
-            pass
-
-# return тут был лишним или стоял не в том месте — удаляем
-
-if text == t(user_id, "interval"):
-    keyboard = [
-        [KeyboardButton("30s"), KeyboardButton("1m")],
-        [KeyboardButton("5m"), KeyboardButton("15m")]
-    ]
-    update.message.reply_text(
-        t(user_id, "choose_interval"),
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+# ===================== KEYBOARDS =====================
+def get_keyboard(lang):
+    return ReplyKeyboardMarkup(
+        keyboard=texts[lang]["main_menu"],
+        resize_keyboard=True,
+        one_time_keyboard=False
     )
-    return
 
-    if text.endswith("s") or text.endswith("m"):
-        try:
-            unit = text[-1]
-            value = int(text[:-1])
-            seconds = value * 60 if unit == "m" else value
-            user_data[user_id]["interval"] = seconds
-            update.message.reply_text(t(user_id, "confirm_interval").format(interval=text), reply_markup=get_reply_keyboard(user_id))
-        except:
-            pass
-        return
+# ===================== CAPTCHA & MENU =====================
+def start(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    user_data[user_id] = {"verified": False, "lang": "en"}
+    lang = "en"
+    context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=texts[lang]["start"],
+        reply_markup=ReplyKeyboardMarkup([["â I'm not a bot"]], resize_keyboard=True)
+    )
 
-    if text == t(user_id, "alerts"):
-        keyboard = [
-            [KeyboardButton(t(user_id, "alert_pump"))],
-            [KeyboardButton(t(user_id, "alert_dump"))],
-            [KeyboardButton(t(user_id, "alert_both"))]
-        ]
-        update.message.reply_text(t(user_id, "choose_alert_type"), reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-        return
+def handle_text(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    message = update.message.text
+    lang = user_data.get(user_id, {}).get("lang", "en")
 
-    if text in [t(user_id, "alert_pump"), t(user_id, "alert_dump"), t(user_id, "alert_both")]:
-        if text == t(user_id, "alert_pump"):
-            user_data[user_id]["alerts"] = "pump"
-        elif text == t(user_id, "alert_dump"):
-            user_data[user_id]["alerts"] = "dump"
+    if not user_data.get(user_id, {}).get("verified"):
+        if message in ["â I'm not a bot", "â Ð¯ Ð½Ðµ Ð±Ð¾Ñ"]:
+            user_data[user_id]["verified"] = True
+            context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=texts[lang]["captcha_passed"],
+                reply_markup=get_keyboard(lang)
+            )
         else:
-            user_data[user_id]["alerts"] = "both"
-        update.message.reply_text(t(user_id, "confirm_alerts").format(alerts=text), reply_markup=get_reply_keyboard(user_id))
+            context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["not_verified"])
         return
 
-    if text == t(user_id, "settings"):
-        settings_msg = (
-            f"{t(user_id, 'language')}: {'🇬🇧 English' if user_data[user_id]['lang'] == 'en' else '🇷🇺 Русский'}\n"
-            f"{t(user_id, 'exchange')}: {user_data[user_id]['exchange']}\n"
-            f"{t(user_id, 'market')}: {user_data[user_id]['market']}\n"
-            f"{t(user_id, 'threshold')}: {user_data[user_id]['threshold']}%\n"
-            f"{t(user_id, 'interval')}: {user_data[user_id]['interval']}s\n"
-            f"{t(user_id, 'alerts')}: {user_data[user_id]['alerts']}\n"
-        )
-        # Здесь заканчивается обработка команды или текста
-update.message.reply_text(t(user_id, "start"), reply_markup=get_reply_keyboard(user_id))
+    if message in ["ð Language", "ð Ð¯Ð·ÑÐº"]:
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["choose_language"],
+                                 reply_markup=ReplyKeyboardMarkup([["English", "Ð ÑÑÑÐºÐ¸Ð¹"]], resize_keyboard=True))
+    elif message in ["English", "Ð ÑÑÑÐºÐ¸Ð¹"]:
+        lang = "en" if message == "English" else "ru"
+        user_data[user_id]["lang"] = lang
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["language_selected"],
+                                 reply_markup=get_keyboard(lang))
+    elif message in ["ð ÐÐ¸ÑÐ¶Ð°", "ð Exchange"]:
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["choose_exchange"],
+                                 reply_markup=ReplyKeyboardMarkup([exchanges], resize_keyboard=True))
+    elif message in exchanges:
+        user_data[user_id]["exchange"] = message
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["settings_applied"],
+                                 reply_markup=get_keyboard(lang))
+    elif message in ["ð¹ Ð ÑÐ½Ð¾Ðº", "ð¹ Market"]:
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["choose_market"],
+                                 reply_markup=ReplyKeyboardMarkup([[texts[lang]["spot"], texts[lang]["futures"]]], resize_keyboard=True))
+    elif message in [texts[lang]["spot"], texts[lang]["futures"]]:
+        user_data[user_id]["market"] = message
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["settings_applied"],
+                                 reply_markup=get_keyboard(lang))
+    elif message in ["â± ÐÐ½ÑÐµÑÐ²Ð°Ð»", "â± Interval"]:
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["choose_interval"],
+                                 reply_markup=ReplyKeyboardMarkup([intervals], resize_keyboard=True))
+    elif message in intervals:
+        user_data[user_id]["interval"] = message
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["settings_applied"],
+                                 reply_markup=get_keyboard(lang))
+    elif message in ["ð ÐÐ¾ÑÐ¾Ð³", "ð Threshold"]:
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["choose_threshold"],
+                                 reply_markup=ReplyKeyboardMarkup([thresholds], resize_keyboard=True))
+    elif message in thresholds:
+        user_data[user_id]["threshold"] = message
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["settings_applied"],
+                                 reply_markup=get_keyboard(lang))
+    elif message in ["ð Ð¢Ð¸Ð¿ ÑÐ²ÐµÐ´Ð¾Ð¼Ð»ÐµÐ½Ð¸Ð¹", "ð Notify Type"]:
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["choose_notify_type"],
+                                 reply_markup=ReplyKeyboardMarkup([[texts[lang]["pump"], texts[lang]["dump"], texts[lang]["both"]]], resize_keyboard=True))
+    elif message in [texts[lang]["pump"], texts[lang]["dump"], texts[lang]["both"]]:
+        user_data[user_id]["notify_type"] = message
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["settings_applied"],
+                                 reply_markup=get_keyboard(lang))
+    elif message in ["âï¸ ÐÐ°ÑÑÑÐ¾Ð¹ÐºÐ¸", "âï¸ Settings"]:
+        settings = user_data.get(user_id, {})
+        s_text = f"{texts[lang]['settings']}
 
+"
+        s_text += f"ð Language: {lang.upper()}
+"
+        s_text += f"ð Exchange: {settings.get('exchange', '-')}
+"
+        s_text += f"ð¹ Market: {settings.get('market', '-')}
+"
+        s_text += f"â± Interval: {settings.get('interval', '-')}
+"
+        s_text += f"ð Threshold: {settings.get('threshold', '-')}
+"
+        s_text += f"ð Notify: {settings.get('notify_type', '-')}
+"
+        context.bot.send_message(chat_id=update.effective_chat.id, text=s_text, reply_markup=get_keyboard(lang))
+    else:
+        context.bot.send_message(chat_id=update.effective_chat.id, text=texts[lang]["confirm"] + message,
+                                 reply_markup=get_keyboard(lang))
 
-# Отдельно — определение функции, без лишнего отступа
-def monitor_prices():
-    while True:
-        for user_id, settings in user_data.items():
-            try:
-                symbol_changes = get_market_changes(
-                    exchange=settings["exchange"],
-                    market_type=settings["market"],
-                    threshold=settings["threshold"],
-                    interval=settings["interval"]
-                )
+# ===================== FLASK WEBHOOK =====================
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
+    return "OK"
 
-                if symbol_changes:
-                    for sym, change in symbol_changes.items():
-                        # Фильтрация по типу уведомлений
-                        if settings["alerts"] == "pump" and change < 0:
-                            continue
-                        if settings["alerts"] == "dump" and change > 0:
-                            continue
-
-                        # Здесь будет отправка                 symbol_changes = get_market_changes(
-                    symbol_changes = get_market_changes(
-    exchange=settings["exchange"],
-    market_type=settings["market"],
-    threshold=settings["threshold"],
-    interval=settings["interval"]
-)                
-                    if symbol_changes:
-                    for sym, change in symbol_changes.items():
-                        # Фильтрация по типу уведомлений
-                        if settings["alerts"] == "pump" and change < 0:
-                            continue
-                        if settings["alerts"] == "dump" and change > 0:
-                            continue
-
-                        print(f"{sym}: {change}")
-                        if settings["alerts"] == "pump" and change < 0:
-                            continue
-                        if settings["alerts"] == "dump" and change > 0:
-                            continue
-
-                        # Уведомление
-                        print(f"{sym}: {change}")
-            except:
-                pass
-                            continue
-                        alert_msg = f"💹 {sym}:\n{change:.2f}% in last {settings['interval']}s"
-                        context.bot.send_message(chat_id=user_id, text=alert_msg)
-            except Exception as e:
-                print(f"Error in monitor_prices: {e}")
-        time.sleep(30)
-
-def get_market_changes(exchange, market_type, threshold, interval):
-    try:
-        # Пример: добавить API-интеграцию под каждую биржу (ниже только шаблон для Binance)
-        if exchange == "Binance":
-            url = "https://api.binance.com/api/v3/ticker/24hr"
-            response = requests.get(url, timeout=10)
-            data = response.json()
-            result = {}
-            for item in data:
-                symbol = item.get("symbol")
-                if market_type == "spot" and not symbol.endswith("USDT"):
-                    continue
-                price_change = float(item.get("priceChangePercent", 0))
-                if abs(price_change) >= threshold:
-                    result[symbol] = price_change
-            return result
-        # Здесь будет расширение для Bybit, MEXC, BingX
-    except Exception as e:
-        print(f"Error in get_market_changes: {e}")
-    return {}
-    # === Запуск Flask и Telegram бота ===
-
-@app.route('/')
+@app.route("/")
 def index():
-    return 'Bot is running.'
+    return "Bot is running."
 
-def run_flask():
-    app.run(host="0.0.0.0", port=8080)
-
-def run_telegram():
-    updater.start_polling()
-    updater.idle()
-
-# === Запуск мониторинга цен в отдельном потоке ===
-
-price_thread = threading.Thread(target=monitor_prices, daemon=True)
-price_thread.start()
-
-# === Запуск сервера и Telegram-бота ===
+# ===================== MAIN =====================
+def main():
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+    bot.set_webhook(url=WEBHOOK_URL)
+    app.run(host="0.0.0.0", port=PORT)
 
 if __name__ == '__main__':
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.start()
-    run_telegram()
+    main()
