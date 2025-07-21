@@ -232,7 +232,12 @@ if text == t(user_id, "interval"):
             try:
                 symbol_changes = get_market_changes(
                     exchange=settings["exchange"],
-                    market_type=settings["market"],
+                    market_type=settings["market"]
+                )
+                # например, что-то вывести
+                print(symbol_changes)
+            except:
+                pass
                     threshold=settings["threshold"],
                     interval=settings["interval"]
                 )
