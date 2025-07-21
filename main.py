@@ -222,17 +222,12 @@ if text == t(user_id, "interval"):
             f"{t(user_id, 'interval')}: {user_data[user_id]['interval']}s\n"
             f"{t(user_id, 'alerts')}: {user_data[user_id]['alerts']}\n"
         )
-        update.message.reply_text(settings_msg, reply_markup=get_reply_keyboard(user_id))
-        return
+        # Здесь заканчивается обработка команды или текста
+update.message.reply_text(t(user_id, "start"), reply_markup=get_reply_keyboard(user_id))
 
-    update.message.reply_text(t(user_id, "start"), reply_markup=get_reply_keyboard(user_id))
-    def monitor_prices():
-    while True:
-        for user_id, settings in user_data.items():
-            try:
-                symbol_changes = get_market_changes(
-                    exchange=settings["exchange"],
-                    def monitor_prices():
+
+# Отдельно — определение функции, без лишнего отступа
+def monitor_prices():
     while True:
         for user_id, settings in user_data.items():
             try:
@@ -245,6 +240,9 @@ if text == t(user_id, "interval"):
 
                 if symbol_changes:
                     for sym, change in symbol_changes.items():
+                        print(f"{sym}: {change}")
+            except:
+                pass
                         print(f"{sym}: {change}")
             except:
                 pass
