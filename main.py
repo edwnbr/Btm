@@ -15,9 +15,9 @@ from telegram.ext import (
 )
 
 # === Константы ===
-TOKEN = '7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE'
+TG_TOKEN = '7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE'
 APP_URL = 'https://btm-c4tt.onrender.com'  # Render-домен
-bot = Bot(token=TOKEN)
+bot = Bot(token=TG_TOKEN)
 
 # === Flask и Dispatcher ===
 app = Flask(__name__)
