@@ -3,37 +3,36 @@ import json
 import time
 import threading
 import logging
+import requests
 import asyncio
 import aiohttp
-import requests
 
 from flask import Flask, request
-from telegram import Bot, Update, ReplyKeyboardMarkup
+from telegram import Bot, Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Dispatcher, CommandHandler, MessageHandler,
-    Filters, CallbackContext
+    Filters, CallbackContext, CallbackQueryHandler
 )
 
-# === Настройки ===
+# === Константы ===
 TOKEN = '7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE'
 APP_URL = 'https://btm-c4tt.onrender.com'  # Render-домен
 bot = Bot(token=TOKEN)
 
-# === Telegram Dispatcher ===
-dispatcher = Dispatcher(bot, None, use_context=True)
-
-# === Flask-приложение ===
+# === Flask и Dispatcher ===
 app = Flask(__name__)
+dispatcher = Dispatcher(bot, None, use_context=True)
 
 # === Логирование ===
 logging.basicConfig(level=logging.INFO)
 
 # === Временное хранилище пользователей ===
 user_data = {}
-
 # === Клавиатуры ===
-main_menu_ru = [['📊 Биржа', '🕒 Таймфрейм'], ['📈 Порог (%)', '🔔 Тип уведомлений'], ['🧠 Язык', '⚙️ Мои настройки']]
-main_menu_en = [['📊 Exchange', '🕒 Timeframe'], ['📈 Threshold (%)', '🔔 Notification type'], ['🧠 Language', '⚙️ My settings']]
+main_menu_ru = [['📊 Биржа', '🕒 Таймфрейм'], ['📈 Порог (%)', '🔔 Тип уведомлений'],
+                ['💱 Рынок', '🧠 Язык'], ['⚙️ Мои настройки']]
+main_menu_en = [['📊 Exchange', '🕒 Timeframe'], ['📈 Threshold (%)', '🔔 Notification type'],
+                ['💱 Market', '🧠 Language'], ['⚙️ My settings']]
 
 def get_keyboard(lang):
     return ReplyKeyboardMarkup(main_menu_ru if lang == 'ru' else main_menu_en, resize_keyboard=True)
@@ -52,7 +51,7 @@ def start(update: Update, context: CallbackContext):
     }
     context.bot.send_message(chat_id, "🔐 Пройдите CAPTCHA: напишите число 321")
 
-# === Обработка CAPTCHA ===
+# === CAPTCHA-проверка ===
 def handle_captcha(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     text = update.message.text
@@ -64,168 +63,245 @@ def handle_captcha(update: Update, context: CallbackContext):
             context.bot.send_message(chat_id, msg, reply_markup=get_keyboard(lang))
         else:
             context.bot.send_message(chat_id, "❌ Неверно. Попробуйте снова.")
+            from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
-# === Обработка текстовых сообщений ===
-def handle_text(update: Update, context: CallbackContext):
+# === Inline-кнопки ===
+def get_inline_keyboard(options, current, prefix):
+    buttons = []
+    for opt in options:
+        label = f"{'✅' if opt == current else ''} {opt}"
+        buttons.append([InlineKeyboardButton(label.strip(), callback_data=f"{prefix}:{opt}")])
+    return InlineKeyboardMarkup(buttons)
+
+# === reply-кнопки ===
+def handle_menu(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     text = update.message.text
-    user = user_data.get(chat_id)
+    if chat_id not in user_data or not user_data[chat_id].get('verified'):
+        return
 
-    if not user or not user.get('verified'):
-        return handle_captcha(update, context)
+    lang = user_data[chat_id]['lang']
 
-    lang = user['lang']
-
-    if text in ['🧠 Язык', '🧠 Language']:
-        new_lang = 'en' if lang == 'ru' else 'ru'
-        user['lang'] = new_lang
-        msg = "🌐 Язык переключён на English" if new_lang == 'en' else "🌐 Language switched to Russian"
-        context.bot.send_message(chat_id, msg, reply_markup=get_keyboard(new_lang))
-
-    elif text in ['📊 Биржа', '📊 Exchange']:
-        exchanges = ['Binance', 'Bybit', 'MEXC', 'BingX']
-        current = user['exchange']
-        new = exchanges[(exchanges.index(current) + 1) % len(exchanges)]
-        user['exchange'] = new
-        msg = f"📊 Биржа: {new}" if lang == 'ru' else f"📊 Exchange: {new}"
-        context.bot.send_message(chat_id, msg)
+    if text in ['📊 Биржа', '📊 Exchange']:
+        options = ['Binance', 'Bybit', 'MEXC', 'BingX']
+        context.bot.send_message(chat_id, "Выберите биржу:" if lang == 'ru' else "Select exchange:",
+                                 reply_markup=get_inline_keyboard(options, user_data[chat_id]['exchange'], 'exchange'))
 
     elif text in ['🕒 Таймфрейм', '🕒 Timeframe']:
-        frames = ['1m', '5m', '15m']
-        current = user['interval']
-        new = frames[(frames.index(current) + 1) % len(frames)]
-        user['interval'] = new
-        msg = f"🕒 Таймфрейм: {new}" if lang == 'ru' else f"🕒 Timeframe: {new}"
-        context.bot.send_message(chat_id, msg)
+        options = ['1m', '5m', '15m', '30m', '1h']
+        context.bot.send_message(chat_id, "Выберите таймфрейм:" if lang == 'ru' else "Select timeframe:",
+                                 reply_markup=get_inline_keyboard(options, user_data[chat_id]['interval'], 'interval'))
 
     elif text in ['📈 Порог (%)', '📈 Threshold (%)']:
-        current = user['threshold']
-        new = 1.0 if current >= 5.0 else round(current + 0.5, 1)
-        user['threshold'] = new
-        msg = f"📈 Порог изменения: {new}%" if lang == 'ru' else f"📈 Threshold: {new}%"
-        context.bot.send_message(chat_id, msg)
+        options = ['0.5', '1', '2', '3', '5']
+        context.bot.send_message(chat_id, "Выберите порог изменения в %:" if lang == 'ru' else "Select % change threshold:",
+                                 reply_markup=get_inline_keyboard(options, str(user_data[chat_id]['threshold']), 'threshold'))
 
     elif text in ['🔔 Тип уведомлений', '🔔 Notification type']:
-        types = ['both', 'pump', 'dump']
-        current = user['notif_type']
-        new = types[(types.index(current) + 1) % len(types)]
-        user['notif_type'] = new
-        notif_names = {'both': '📈📉 Памп и дамп', 'pump': '📈 Только памп', 'dump': '📉 Только дамп'} if lang == 'ru' \
-                      else {'both': '📈📉 Pump & Dump', 'pump': '📈 Pump only', 'dump': '📉 Dump only'}
-        context.bot.send_message(chat_id, notif_names[new])
+        options = ['pump', 'dump', 'both']
+        context.bot.send_message(chat_id, "Выберите тип уведомлений:" if lang == 'ru' else "Select notification type:",
+                                 reply_markup=get_inline_keyboard(options, user_data[chat_id]['notif_type'], 'notif'))
+
+    elif text in ['💱 Рынок', '💱 Market']:
+        options = ['spot', 'futures']
+        context.bot.send_message(chat_id, "Выберите рынок:" if lang == 'ru' else "Select market:",
+                                 reply_markup=get_inline_keyboard(options, user_data[chat_id]['market'], 'market'))
+
+    elif text in ['🧠 Язык', '🧠 Language']:
+        options = ['ru', 'en']
+        context.bot.send_message(chat_id, "Выберите язык:" if lang == 'ru' else "Select language:",
+                                 reply_markup=get_inline_keyboard(options, user_data[chat_id]['lang'], 'lang'))
 
     elif text in ['⚙️ Мои настройки', '⚙️ My settings']:
-        msg = (
-            f"⚙️ Текущие настройки:\n"
-            f"🌐 Язык: {'Русский' if lang == 'ru' else 'English'}\n"
-            f"📊 Биржа: {user['exchange']}\n"
-            f"🕒 Таймфрейм: {user['interval']}\n"
-            f"📈 Порог: {user['threshold']}%\n"
-            f"🔔 Тип: {user['notif_type']}"
+        u = user_data[chat_id]
+        summary = (
+            f"📊 Биржа: {u['exchange']}\n"
+            f"💱 Рынок: {u['market']}\n"
+            f"🕒 Таймфрейм: {u['interval']}\n"
+            f"📈 Порог: {u['threshold']}%\n"
+            f"🔔 Тип уведомлений: {u['notif_type']}\n"
+            f"🧠 Язык: {u['lang']}"
+        ) if lang == 'ru' else (
+            f"📊 Exchange: {u['exchange']}\n"
+            f"💱 Market: {u['market']}\n"
+            f"🕒 Timeframe: {u['interval']}\n"
+            f"📈 Threshold: {u['threshold']}%\n"
+            f"🔔 Notification type: {u['notif_type']}\n"
+            f"🧠 Language: {u['lang']}"
         )
-        context.bot.send_message(chat_id, msg)
-    else:
-        context.bot.send_message(chat_id, "Выберите действие из меню." if lang == 'ru' else "Please choose an option from the menu.")
+        context.bot.send_message(chat_id, summary)
+        # === Обработка inline-кнопок ===
+def inline_handler(update: Update, context: CallbackContext):
+    query = update.callback_query
+    chat_id = query.message.chat.id
+    data = query.data
 
-# === Мониторинг API ===
-async def fetch_data(session, url):
+    if ':' not in data:
+        return
+
+    key, value = data.split(':', 1)
+    if key in ['exchange', 'interval', 'threshold', 'notif', 'lang', 'market']:
+        user_data[chat_id][key if key != 'notif' else 'notif_type'] = value if key != 'threshold' else float(value)
+        lang = user_data[chat_id]['lang']
+        query.answer("Обновлено!" if lang == 'ru' else "Updated!")
+        query.edit_message_text("✅ Обновлено!" if lang == 'ru' else "✅ Updated!")
+
+# === Команда AI-анализа ===
+def ai_analysis(update: Update, context: CallbackContext):
+    chat_id = update.effective_chat.id
+    if chat_id not in user_data or not user_data[chat_id].get('verified'):
+        return
+
+    msg = update.message.text.strip()
+    parts = msg.split()
+    if len(parts) < 2:
+        update.message.reply_text("Пример: AI BTC" if user_data[chat_id]['lang'] == 'ru' else "Example: AI BTC")
+        return
+
+    symbol = parts[1].upper()
+    exchange = user_data[chat_id]['exchange']
+    interval = user_data[chat_id]['interval']
+    market = user_data[chat_id]['market']
+    lang = user_data[chat_id]['lang']
+
     try:
-        async with session.get(url, timeout=10) as response:
-            return await response.json()
-    except:
-        return None
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval={interval}"
+        res = requests.get(url)
+        data = res.json()
 
-async def monitor():
-    while True:
-        async with aiohttp.ClientSession() as session:
-            for chat_id, user in user_data.items():
-                if not user.get('verified'):
-                    continue
-                exchange = user['exchange']
-                market_type = user['market']
-                interval = user['interval']
-                threshold = user['threshold']
-                notif_type = user['notif_type']
-                lang = user['lang']
+        if not isinstance(data, list):
+            raise ValueError()
 
-                url = get_api_url(exchange, market_type)
-                data = await fetch_data(session, url)
+        close_prices = [float(k[4]) for k in data[-5:]]
+        volumes = [float(k[5]) for k in data[-5:]]
 
-                if data:
-                    changes = analyze_data(data, threshold)
-                    if changes:
-                        text = format_message(changes, lang, notif_type)
-                        if text:
-                            try:
-                                bot.send_message(chat_id, text)
-                            except Exception as e:
-                                logging.warning(f"Send message failed: {e}")
-        await asyncio.sleep(30)
+        price_change = (close_prices[-1] - close_prices[0]) / close_prices[0] * 100
+        volume_avg = sum(volumes[:-1]) / len(volumes[:-1])
+        volume_now = volumes[-1]
+        volume_ratio = volume_now / volume_avg if volume_avg > 0 else 0
 
-def get_api_url(exchange, market_type):
-    if exchange == 'Binance':
-        return "https://api.binance.com/api/v3/ticker/24hr"
-    elif exchange == 'Bybit':
-        return "https://api.bybit.com/v5/market/tickers?category=linear" if market_type == 'futures' \
-            else "https://api.bybit.com/v5/market/tickers?category=spot"
-    elif exchange == 'MEXC':
-        return "https://api.mexc.com/api/v3/ticker/24hr"
-    elif exchange == 'BingX':
-        return "https://open-api.bingx.com/openApi/spot/v1/ticker/24hr"
-    return ""
+        if abs(price_change) < 0.3 and volume_ratio < 1.2:
+            trend = "боковик" if lang == 'ru' else "sideways"
+        elif price_change > 0 and volume_ratio > 1.5:
+            trend = "рост" if lang == 'ru' else "uptrend"
+        elif price_change < 0 and volume_ratio > 1.5:
+            trend = "падение" if lang == 'ru' else "downtrend"
+        else:
+            trend = "неопределённость" if lang == 'ru' else "uncertain"
 
-def analyze_data(data, threshold):
-    results = []
-    for item in data.get('result', {}).get('list', []) if isinstance(data, dict) else data:
-        try:
-            symbol = item.get('symbol') or item.get('s')
-            change = float(item.get('priceChangePercent') or item.get('P'))
-            if abs(change) >= threshold:
-                results.append((symbol, change))
-        except:
-            continue
-    return results
+        reply = f"🔍 AI-анализ монеты {symbol}:\n📈 Изменение: {price_change:.2f}%\n📊 Объём: {volume_now:.2f} (x{volume_ratio:.2f})\n📉 Вывод: {trend}" if lang == 'ru' else \
+                f"🔍 AI analysis for {symbol}:\n📈 Change: {price_change:.2f}%\n📊 Volume: {volume_now:.2f} (x{volume_ratio:.2f})\n📉 Conclusion: {trend}"
 
-def format_message(changes, lang, notif_type):
-    lines = []
-    for symbol, change in changes:
-        if notif_type == 'pump' and change < 0:
-            continue
-        if notif_type == 'dump' and change > 0:
-            continue
-        arrow = "📈" if change > 0 else "📉"
-        percent = f"{change:.2f}%"
-        lines.append(f"{arrow} {symbol}: {percent}")
-    if not lines:
-        return ""
-    header = "🚨 Обнаружено движение на рынке:" if lang == 'ru' else "🚨 Market movement detected:"
-    return f"{header}\n" + "\n".join(lines)
+        update.message.reply_text(reply)
 
-# === Flask роуты ===
-@app.route('/')
-def index():
-    return 'Bot is running!'
+    except Exception as e:
+        update.message.reply_text("Ошибка анализа." if lang == 'ru' else "Analysis error.")
+        # === Подключение всех хендлеров ===
+def setup_dispatcher(dp):
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(MessageHandler(Filters.text & Filters.regex(r'^(Мои настройки|My Settings)$'), show_settings))
+    dp.add_handler(MessageHandler(Filters.text & Filters.regex(r'^(Настройки|Settings)$'), settings_menu))
+    dp.add_handler(MessageHandler(Filters.text & Filters.regex(r'^(Язык|Language)$'), set_language))
+    dp.add_handler(MessageHandler(Filters.text & Filters.regex(r'^(Биржа|Exchange)$'), set_exchange))
+    dp.add_handler(MessageHandler(Filters.text & Filters.regex(r'^(Интервал|Interval)$'), set_interval))
+    dp.add_handler(MessageHandler(Filters.text & Filters.regex(r'^(Порог|Threshold)$'), set_threshold))
+    dp.add_handler(MessageHandler(Filters.text & Filters.regex(r'^(Тип уведомлений|Notification Type)$'), set_notif_type))
+    dp.add_handler(MessageHandler(Filters.text & Filters.regex(r'^(Рынок|Market)$'), set_market))
+    dp.add_handler(MessageHandler(Filters.text & Filters.regex(r'^(AI|АИ)\s+[A-Za-z]+'), ai_analysis))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.text & Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
+    dp.add_handler(MessageHandler(Filters.command, start))
+    dp.add_handler(MessageHandler(Filters.all, start))
+    dp.add_handler(MessageHandler(Filters.text, start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^.+$'), start))
 
-@app.route('/' + TOKEN, methods=['POST'])
+    dp.add_handler(MessageHandler(Filters.callback_query, inline_handler))
+
+# === Flask-сервер ===
+TOKEN = os.getenv('BOT_TOKEN')
+bot = Bot(token=TOKEN)
+app = Flask(__name__)
+dispatcher = Dispatcher(bot, None, workers=4)
+
+setup_dispatcher(dispatcher)
+
+@app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), bot)
     dispatcher.process_update(update)
-    return 'ok'
+    return "OK"
 
-# === Запуск ===
-def start_flask():
-    app.run(host='0.0.0.0', port=8080)
-
-def start_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.create_task(monitor())
-    loop.run_forever()
-
-# === Регистрация хендлеров ===
-dispatcher.add_handler(CommandHandler('start', start))
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+@app.route("/", methods=["GET"])
+def index():
+    return "Bot is running!"
 
 if __name__ == '__main__':
-    threading.Thread(target=start_flask).start()
-    start_bot()
+    PORT = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=PORT)
