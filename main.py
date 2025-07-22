@@ -1,11 +1,12 @@
-# main.py (Часть 1)
-
 import os
 import json
 import time
 import threading
-import requests
 import logging
+import asyncio
+import aiohttp
+import requests
+
 from flask import Flask, request
 from telegram import Bot, Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -18,15 +19,14 @@ TOKEN = '7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE'
 APP_URL = 'https://btm-c4tt.onrender.com'  # Render-домен
 bot = Bot(token=TOKEN)
 
-# === Инициализация Flask ===
-app = Flask(__name__)
-
 # === Telegram Dispatcher ===
 dispatcher = Dispatcher(bot, None, use_context=True)
 
+# === Flask-приложение ===
+app = Flask(__name__)
+
 # === Логирование ===
 logging.basicConfig(level=logging.INFO)
-# main.py (Часть 2)
 
 # === Временное хранилище пользователей ===
 user_data = {}
@@ -51,7 +51,7 @@ def start(update: Update, context: CallbackContext):
         'notif_type': 'both',
     }
     context.bot.send_message(chat_id, "🔐 Пройдите CAPTCHA: напишите число 321")
-    
+
 # === Обработка CAPTCHA ===
 def handle_captcha(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
@@ -64,8 +64,8 @@ def handle_captcha(update: Update, context: CallbackContext):
             context.bot.send_message(chat_id, msg, reply_markup=get_keyboard(lang))
         else:
             context.bot.send_message(chat_id, "❌ Неверно. Попробуйте снова.")
-   # main.py (Часть 3)
 
+# === Обработка текстовых сообщений ===
 def handle_text(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     text = update.message.text
@@ -76,14 +76,12 @@ def handle_text(update: Update, context: CallbackContext):
 
     lang = user['lang']
 
-    # === Язык ===
     if text in ['🧠 Язык', '🧠 Language']:
         new_lang = 'en' if lang == 'ru' else 'ru'
         user['lang'] = new_lang
         msg = "🌐 Язык переключён на English" if new_lang == 'en' else "🌐 Language switched to Russian"
         context.bot.send_message(chat_id, msg, reply_markup=get_keyboard(new_lang))
 
-    # === Биржа ===
     elif text in ['📊 Биржа', '📊 Exchange']:
         exchanges = ['Binance', 'Bybit', 'MEXC', 'BingX']
         current = user['exchange']
@@ -92,7 +90,6 @@ def handle_text(update: Update, context: CallbackContext):
         msg = f"📊 Биржа: {new}" if lang == 'ru' else f"📊 Exchange: {new}"
         context.bot.send_message(chat_id, msg)
 
-    # === Таймфрейм ===
     elif text in ['🕒 Таймфрейм', '🕒 Timeframe']:
         frames = ['1m', '5m', '15m']
         current = user['interval']
@@ -101,7 +98,6 @@ def handle_text(update: Update, context: CallbackContext):
         msg = f"🕒 Таймфрейм: {new}" if lang == 'ru' else f"🕒 Timeframe: {new}"
         context.bot.send_message(chat_id, msg)
 
-    # === Порог (%) ===
     elif text in ['📈 Порог (%)', '📈 Threshold (%)']:
         current = user['threshold']
         new = 1.0 if current >= 5.0 else round(current + 0.5, 1)
@@ -109,7 +105,6 @@ def handle_text(update: Update, context: CallbackContext):
         msg = f"📈 Порог изменения: {new}%" if lang == 'ru' else f"📈 Threshold: {new}%"
         context.bot.send_message(chat_id, msg)
 
-    # === Тип уведомлений ===
     elif text in ['🔔 Тип уведомлений', '🔔 Notification type']:
         types = ['both', 'pump', 'dump']
         current = user['notif_type']
@@ -119,7 +114,6 @@ def handle_text(update: Update, context: CallbackContext):
                       else {'both': '📈📉 Pump & Dump', 'pump': '📈 Pump only', 'dump': '📉 Dump only'}
         context.bot.send_message(chat_id, notif_names[new])
 
-    # === Мои настройки ===
     elif text in ['⚙️ Мои настройки', '⚙️ My settings']:
         msg = (
             f"⚙️ Текущие настройки:\n"
@@ -130,15 +124,10 @@ def handle_text(update: Update, context: CallbackContext):
             f"🔔 Тип: {user['notif_type']}"
         )
         context.bot.send_message(chat_id, msg)
-
     else:
-        context.bot.send_message(chat_id, "Выберите действие из меню." if lang == 'ru' else "Please choose an option from the menu.")   
-# main.py (Часть 4)
+        context.bot.send_message(chat_id, "Выберите действие из меню." if lang == 'ru' else "Please choose an option from the menu.")
 
-import asyncio
-import aiohttp
-import time
-
+# === Мониторинг API ===
 async def fetch_data(session, url):
     try:
         async with session.get(url, timeout=10) as response:
@@ -152,7 +141,6 @@ async def monitor():
             for chat_id, user in user_data.items():
                 if not user.get('verified'):
                     continue
-
                 exchange = user['exchange']
                 market_type = user['market']
                 interval = user['interval']
@@ -168,7 +156,10 @@ async def monitor():
                     if changes:
                         text = format_message(changes, lang, notif_type)
                         if text:
-                            context.bot.send_message(chat_id, text)
+                            try:
+                                bot.send_message(chat_id, text)
+                            except Exception as e:
+                                logging.warning(f"Send message failed: {e}")
         await asyncio.sleep(30)
 
 def get_api_url(exchange, market_type):
@@ -209,31 +200,31 @@ def format_message(changes, lang, notif_type):
         return ""
     header = "🚨 Обнаружено движение на рынке:" if lang == 'ru' else "🚨 Market movement detected:"
     return f"{header}\n" + "\n".join(lines)
-    # main.py (Часть 5 — финальная)
 
-from flask import Flask, request
-import threading
-
-app = Flask(__name__)
-
+# === Flask роуты ===
 @app.route('/')
 def index():
     return 'Bot is running!'
 
 @app.route('/' + TOKEN, methods=['POST'])
 def webhook():
-    update = Update.de_json(request.get_json(force=True), updater.bot)
-    updater.dispatcher.process_update(update)
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
     return 'ok'
 
+# === Запуск ===
 def start_flask():
     app.run(host='0.0.0.0', port=8080)
 
 def start_bot():
-    updater.start_polling()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     loop.create_task(monitor())
-    updater.idle()
+    loop.run_forever()
+
+# === Регистрация хендлеров ===
+dispatcher.add_handler(CommandHandler('start', start))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
 
 if __name__ == '__main__':
     threading.Thread(target=start_flask).start()
