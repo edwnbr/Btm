@@ -1,698 +1,107 @@
-from telegram import ReplyKeyboardMarkup, Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
-import logging, json, time
+import logging
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler
+import requests
+from flask import Flask, request
+import threading
+import time
 
-# Настройка логов
+# Настройки
+TOKEN = "7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE"
+WEBHOOK_URL = "https://btm-c4tt.onrender.com/" + TOKEN
+
+# Инициализация Flask-приложения
+app = Flask(__name__)
+
+# Включаем логирование
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-# Словарь для хранения настроек пользователей
-user_settings = {}
+# Стартовые состояния
+LANGUAGE, MENU = range(2)
+
+# Данные пользователей
+user_data = {}
 
 # Языковые пакеты
-LANGUAGES = {
-    "ru": {
-        "start": "Привет! Выбери язык / Choose language:",
-        "language_selected": "Язык установлен: Русский",
-        "choose_exchange": "Выберите биржу:",
-        "choose_market": "Выберите рынок:",
-        "spot": "Спот",
-        "futures": "Фьючерсы",
-        "choose_timeframe": "Выберите таймфрейм:",
-        "choose_threshold": "Выберите порог изменения (%):",
-        "settings_saved": "Настройки сохранены.",
-        "my_settings": "Ваши текущие настройки:"
+texts = {
+    'ru': {
+        'start': "🌐 Выберите язык / Select language:",
+        'menu': "⚙️ Главное меню:",
+        'settings': "🛠 Настройки сохранены.",
+        'choose_exchange': "🏦 Выберите биржу:",
+        'choose_market': "📊 Выберите тип рынка:",
+        'choose_timeframe': "⏱ Выберите таймфрейм:",
+        'choose_threshold': "📈 Выберите порог изменения (%):",
+        'choose_notify': "⚡ Выберите тип уведомлений:",
+        'ai_analysis': "🤖 AI-анализ активирован.",
+        'back': "🔙 Назад в меню",
     },
-    "en": {
-        "start": "Hi! Choose your language:",
-        "language_selected": "Language set: English",
-        "choose_exchange": "Choose exchange:",
-        "choose_market": "Choose market:",
-        "spot": "Spot",
-        "futures": "Futures",
-        "choose_timeframe": "Choose timeframe:",
-        "choose_threshold": "Choose threshold (%):",
-        "settings_saved": "Settings saved.",
-        "my_settings": "Your current settings:"
+    'en': {
+        'start': "🌐 Choose language:",
+        'menu': "⚙️ Main menu:",
+        'settings': "🛠 Settings saved.",
+        'choose_exchange': "🏦 Choose exchange:",
+        'choose_market': "📊 Choose market type:",
+        'choose_timeframe': "⏱ Choose timeframe:",
+        'choose_threshold': "📈 Choose threshold change (%):",
+        'choose_notify': "⚡ Choose notification type:",
+        'ai_analysis': "🤖 AI analysis activated.",
+        'back': "🔙 Back to menu",
     }
 }
 
-default_reply = [["Binance", "Bybit"], ["MEXC", "BingX"], ["Spot", "Futures"], ["30s", "1m", "5m"], ["0.5%", "1%", "3%"], ["Мои настройки", "My settings"]]
+reply_keyboards = {
+    'language': [['🇷🇺 Русский', '🇺🇸 English']],
+    'main_ru': [['🏦 Биржа', '📊 Рынок'], ['⏱ Таймфрейм', '📈 Порог %'], ['⚡ Уведомления', '🤖 AI-анализ'], ['🔄 Мои настройки']],
+    'main_en': [['🏦 Exchange', '📊 Market'], ['⏱ Timeframe', '📈 Threshold %'], ['⚡ Notifications', '🤖 AI analysis'], ['🔄 My Settings']],
+}
 
-# Стартовая команда
-def start(update: Update, context: CallbackContext):
-    chat_id = update.effective_chat.id
-    user_settings[chat_id] = {"language": "ru"}
-    reply_markup = ReplyKeyboardMarkup([["Русский", "English"]], resize_keyboard=True)
-    update.message.reply_text(LANGUAGES["ru"]["start"], reply_markup=reply_markup)
+def start(update: Update, context: CallbackContext) -> int:
+    update.message.reply_text(texts['ru']['start'], reply_markup=ReplyKeyboardMarkup(reply_keyboards['language'], resize_keyboard=True))
+    return LANGUAGE
 
-# Обработка сообщений
-def handle_message(update: Update, context: CallbackContext):
-    chat_id = update.effective_chat.id
-    text = update.message.text.strip()
-    user = user_settings.get(chat_id, {"language": "ru"})
-    lang = user["language"]
+def language(update: Update, context: CallbackContext) -> int:
+    lang = 'ru' if 'Русский' in update.message.text else 'en'
+    user_id = update.effective_user.id
+    user_data[user_id] = {'lang': lang}
+    markup = ReplyKeyboardMarkup(reply_keyboards[f'main_{lang}'], resize_keyboard=True)
+    update.message.reply_text(texts[lang]['menu'], reply_markup=markup)
+    return MENU
 
-    if text.lower() in ["русский", "russian"]:
-        user_settings[chat_id]["language"] = "ru"
-        update.message.reply_text(LANGUAGES["ru"]["language_selected"])
-    elif text.lower() in ["english", "английский"]:
-        user_settings[chat_id]["language"] = "en"
-        update.message.reply_text(LANGUAGES["en"]["language_selected"])
-    elif text in ["Binance", "Bybit", "MEXC", "BingX"]:
-        user_settings[chat_id]["exchange"] = text
-    elif text.lower() in ["spot", "спот"]:
-        user_settings[chat_id]["market"] = "spot"
-    elif text.lower() in ["futures", "фьючерсы"]:
-        user_settings[chat_id]["market"] = "futures"
-    elif text in ["30s", "1m", "5m", "15m"]:
-        user_settings[chat_id]["timeframe"] = text
-    elif text in ["0.5%", "1%", "3%"]:
-        user_settings[chat_id]["threshold"] = text
-    elif text.lower() in ["мои настройки", "my settings"]:
-        current = user_settings.get(chat_id, {})
-        message = LANGUAGES[lang]["my_settings"] + "\n" + json.dumps(current, indent=2, ensure_ascii=False)
-        update.message.reply_text(message)
-        return
+def menu_handler(update: Update, context: CallbackContext) -> int:
+    user_id = update.effective_user.id
+    lang = user_data.get(user_id, {}).get('lang', 'en')
+    msg = update.message.text
+    reply = ReplyKeyboardMarkup(reply_keyboards[f'main_{lang}'], resize_keyboard=True)
+    update.message.reply_text(texts[lang]['menu'], reply_markup=reply)
+    return MENU
 
-    reply_markup = ReplyKeyboardMarkup(default_reply, resize_keyboard=True)
-    update.message.reply_text(LANGUAGES[lang]["settings_saved"], reply_markup=reply_markup)
-
-# Основной запуск бота
-def main():
-    TOKEN = "7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE"
+def webhook():
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-    updater.start_polling()
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            LANGUAGE: [MessageHandler(Filters.text & ~Filters.command, language)],
+            MENU: [MessageHandler(Filters.text & ~Filters.command, menu_handler)],
+        },
+        fallbacks=[],
+    )
+
+    dp.add_handler(conv_handler)
+
+    updater.start_webhook(listen="0.0.0.0", port=8443, url_path=TOKEN, webhook_url=WEBHOOK_URL)
     updater.idle()
 
-if __name__ == '__main__':
-    main()
+@app.route("/" + TOKEN, methods=["POST"])
+def telegram_webhook():
+    return "OK", 200
 
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
-# --- placeholder ---
+def run_flask():
+    app.run(host="0.0.0.0", port=8080)
+
+# Запуск
+if __name__ == '__main__':
+    threading.Thread(target=run_flask).start()
+    webhook()
