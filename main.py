@@ -15,8 +15,13 @@ from telegram.ext import (
 )
 
 # === Константы ===
-TG_TOKEN = '7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE'
+TG_TOKEN = os.environ.get('TG_TOKEN') or '7697812728:AAG72LwVSOhN-v1kguh3OPXK9BzXffJUrYE'
 APP_URL = 'https://btm-c4tt.onrender.com'  # Render-домен
+
+# Проверка на пустой токен
+if not TG_TOKEN or TG_TOKEN.strip() == "":
+    raise ValueError("TG_TOKEN is empty or not set")
+
 bot = Bot(token=TG_TOKEN)
 
 # === Flask и Dispatcher ===
